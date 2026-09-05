@@ -3,7 +3,7 @@ name: Taj Price Tracker
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/3 * * * *"
 
 permissions:
   contents: write
