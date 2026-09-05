@@ -64,29 +64,24 @@ def api_response_filter(response):
 
 
 def browser_direct_api_fetch(page):
-    """Fallback: make the verified availability POST from inside Chromium."""
+    """Fallback: use Playwright's browser-context request, sharing the browser cookies."""
     payload = api_payload()
-    script = """
-    async ({url, payload}) => {
-      const r = await fetch(url, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'accept': 'application/json, text/plain, */*',
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-      const text = await r.text();
-      return {status: r.status, text};
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "content-type": "application/json",
+        "origin": "https://www.tajhotels.com",
+        "referer": target_url(),
+        "user-agent": page.evaluate("navigator.userAgent"),
+        "sec-ch-ua": page.evaluate("navigator.userAgentData ? navigator.userAgentData.brands.map(x => `\\\"${x.brand}\\\";v=\\\"${x.version}\\\"`).join(', ') : ''"),
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\\\"Linux\\\"",
     }
-    """
-    result = page.evaluate(script, {"url": TAJ_API_URL, "payload": payload})
-    status = int(result.get("status", 0))
-    print("Browser direct Taj API HTTP:", status)
-    if status != 200:
-        raise RuntimeError(f"Browser direct Taj API failed: HTTP {status} | {result.get('text', '')[:300]}")
-    return json.loads(result["text"])
+    result = page.context.request.post(TAJ_API_URL, data=payload, headers=headers, timeout=60000)
+    print("Browser-context Taj API HTTP:", result.status)
+    text = result.text()
+    if result.status != 200:
+        raise RuntimeError(f"Browser-context Taj API failed: HTTP {result.status} | {text[:500]}")
+    return json.loads(text)
 
 
 def parse_price(rate):
@@ -227,13 +222,9 @@ def check_price():
                 if click_exact_text(page, "SEARCH"):
                     diagnostics["trigger"] = "SEARCH"
                 else:
-                    print("No visible trigger found. Verified API ko isi Chromium browser se direct POST kar raha hoon...")
-                    diagnostics["trigger"] = "BROWSER_DIRECT_API"
-                    try:
-                        captured["data"] = browser_direct_api_fetch(page)
-                    except Exception as exc:
-                        diagnostics["direct_api_error"] = str(exc)
-                        raise
+                    print("No visible trigger found. Verified API ko browser-context request se direct POST kar raha hoon...")
+                    diagnostics["trigger"] = "BROWSER_CONTEXT_API"
+                    captured["data"] = browser_direct_api_fetch(page)
 
             if captured["data"] is None:
                 for _ in range(60):
