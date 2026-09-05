@@ -1,375 +1,263 @@
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-import re
+"""Taj City Centre Gurugram price tracker.
+
+This intentionally captures the response from Taj's *own* browser request to
+the verified hotel-availability service.  It does not send an invented API
+request, and it never opens or operates a date-picker/calendar.
+"""
+from __future__ import annotations
+
+import asyncio
 import json
 import os
+import re
+import sys
 from datetime import datetime
 from pathlib import Path
-from copy import copy
-from openpyxl import Workbook, load_workbook
+from typing import TYPE_CHECKING, Any, Iterable
+from urllib.parse import urlencode
 
-HOTEL_URL = "https://www.tajhotels.com/en-in/hotels/taj-city-centre-gurugram?adults=1&children=0&from=2026-12-25&to=2026-12-26"
-TAJ_API_HOST = "api-cug1-825v2.tajhotels.com"
-TAJ_API_PATH = "/hudiniService/v1/hotel-availability"
+if TYPE_CHECKING:
+    from playwright.async_api import Response
 
-ROOM_NAMES = [
-    "SUPERIOR ROOM TWIN BED",
-    "SUPERIOR ROOM KING BED",
-]
-TARGET_ROOM_CODES = {
-    "DTX": "SUPERIOR ROOM TWIN BED",
-    "DKX": "SUPERIOR ROOM KING BED",
-}
-TELEGRAM_CHAT_ID = "348797661"
-EXCEL_FILE = Path("Taj_Price_History.xlsx")
-
-
-def create_browser(p):
-    print("Fresh headless browser open kar raha hoon...")
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--deny-permission-prompts",
-        ],
-    )
-    context = browser.new_context(
-        viewport={"width": 1400, "height": 900},
-        locale="en-IN",
-        timezone_id="Asia/Kolkata",
-        permissions=[],
-    )
-    page = context.new_page()
-    page.set_default_timeout(60000)
-    return browser, context, page
+CHECK_IN = "2026-12-25"
+CHECK_OUT = "2026-12-26"
+ROOM_CODES = {"DTX": "Superior Room Twin Bed", "DKX": "Superior Room King Bed"}
+HOTEL_URL = "https://www.tajhotels.com/en-in/hotels/taj-city-centre-gurugram"
+AVAILABILITY_PATH = "api-cug1-825v2.tajhotels.com/hudiniService/v1/hotel-availability"
+HISTORY_FILE = Path("Taj_Price_History.xlsx")
+DEBUG_FILE = Path("taj_tracker_debug.json")
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 
-def is_target_availability_response(response):
-    return (
-        response.request.method == "POST"
-        and TAJ_API_HOST in response.url
-        and TAJ_API_PATH in response.url
-    )
+def target_url() -> str:
+    # These are page-navigation parameters, not an undocumented API payload.
+    return f"{HOTEL_URL}?{urlencode({'adults': 1, 'children': 0, 'rooms': 1, 'from': CHECK_IN, 'to': CHECK_OUT})}"
 
 
-def wait_for_availability_response(page):
-    captured = {"data": None, "status": None, "url": None}
-
-    def on_response(response):
-        if not is_target_availability_response(response):
-            return
-        try:
-            request_data = response.request.post_data
-            if request_data:
-                req = json.loads(request_data)
-                if req.get("startDate") != "2026-12-25" or req.get("endDate") != "2026-12-26":
-                    return
-            if response.status != 200:
-                print("Taj availability response HTTP:", response.status)
-                return
-            body = response.text()
-            data = json.loads(body)
-            captured["data"] = data
-            captured["status"] = response.status
-            captured["url"] = response.url
-            print("Taj availability API response captured: HTTP 200")
-        except Exception as exc:
-            print("Availability response parse error:", exc)
-
-    page.on("response", on_response)
-    return captured
+def norm(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
 
 
-def click_search(page):
-    print("Taj SEARCH button trigger kar raha hoon...")
-
-    # The hotel page accepts the stay dates through the URL query parameters.
-    # Clicking SEARCH is what actually causes the browser to request the
-    # hotel-availability API. No calendar DOM selectors are used here.
-    candidates = [
-        page.get_by_role("button", name=re.compile(r"^SEARCH$", re.I)),
-        page.get_by_text(re.compile(r"^SEARCH$", re.I)),
-    ]
-
-    for locator in candidates:
-        try:
-            count = locator.count()
-            for i in range(min(count, 20)):
-                el = locator.nth(i)
-                if not el.is_visible():
-                    continue
-                try:
-                    el.scroll_into_view_if_needed(timeout=5000)
-                except Exception:
-                    pass
-                print("SEARCH button mil gaya; click kar raha hoon.")
-                el.click(timeout=10000)
-                return True
-        except Exception as exc:
-            print("SEARCH locator attempt failed:", exc)
-
-    # Last-resort: inspect visible buttons and click one whose text is SEARCH.
-    buttons = page.locator("button, [role='button']")
-    for i in range(buttons.count()):
-        try:
-            el = buttons.nth(i)
-            if not el.is_visible():
-                continue
-            txt = re.sub(r"\s+", " ", el.inner_text()).strip().upper()
-            if txt == "SEARCH":
-                print("SEARCH button fallback se mila; click kar raha hoon.")
-                el.click(timeout=10000)
-                return True
-        except Exception:
-            pass
-
-    return False
-
-
-def get_taj_api_response(page):
-    captured = wait_for_availability_response(page)
-
-    print("Taj hotel page load kar raha hoon...")
-    page.goto(HOTEL_URL, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(5000)
-    print("Hotel page loaded:", page.url)
-
-    # Search must be explicitly triggered. This reproduces the action that
-    # produced the successful API request in the user's real Chrome capture.
-    clicked = click_search(page)
-    if not clicked:
-        raise RuntimeError("Taj SEARCH button nahi mila; availability request trigger nahi hui.")
-
-    # Wait for the API response generated by SEARCH.
-    for _ in range(60):
-        if captured["data"] is not None:
-            break
-        page.wait_for_timeout(1000)
-
-    if captured["data"] is None:
-        raise RuntimeError("Taj availability API response capture nahi hui after SEARCH.")
-
-    Path("taj_last_api_response.json").write_text(
-        json.dumps(captured["data"], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return captured["data"]
-
-
-def api_price(rate):
+def text_blob(value: Any) -> str:
     try:
-        return float(rate["daily"][0]["price"]["amount"])
-    except Exception:
+        return norm(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+    except (TypeError, ValueError):
+        return norm(value)
+
+
+def room_code(record: dict[str, Any]) -> str | None:
+    for key in ("roomCode", "room_code", "code", "roomTypeCode", "roomTypeId", "inventoryCode"):
+        value = str(record.get(key, "")).upper().strip()
+        if value in ROOM_CODES:
+            return value
+    return None
+
+
+def is_full_stay_nonref(record: dict[str, Any]) -> bool:
+    """Reject only rates explicitly marked non-refundable for the full stay."""
+    text = text_blob(record)
+    nonref = any(token in text for token in ("non-refundable", "non refundable", "nonrefundable", "non_refundable"))
+    full_stay = (
+        "100%" in text
+        or "full stay" in text
+        or "entire stay" in text
+        or "total stay" in text
+        or "one hundred percent" in text
+    )
+    return nonref and full_stay
+
+
+def number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
         return None
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else None
+    if isinstance(value, str):
+        match = re.search(r"(?:INR|₹)?\s*([0-9][0-9,]*(?:\.\d+)?)", value)
+        if match:
+            parsed = float(match.group(1).replace(",", ""))
+            return parsed if parsed > 0 else None
+    return None
 
 
-def rate_is_100pct_nonrefundable(rate):
-    rc = rate.get("rateContent") or {}
-    details = rc.get("details") or {}
-    bp = rate.get("bookingPolicy") or {}
-    cp = rate.get("cancellationPolicy") or {}
-    parts = [
-        rc.get("name"),
-        details.get("description"),
-        details.get("detailedDescription"),
-        details.get("displayName"),
-        details.get("displayDescription"),
-        bp.get("description"),
-        bp.get("refundableStay"),
-        cp.get("description"),
-    ]
-    text = re.sub(r"\s+", " ", " ".join(str(x) for x in parts if x)).upper()
-    return (
-        ("100 PCT" in text or "100%" in text or "100 PERCENT" in text)
-        and ("NON-REFUNDABLE" in text or "NON REFUNDABLE" in text or "NONREFUNDABLE" in text)
+def monetary_values(record: dict[str, Any]) -> list[float]:
+    """Prefer total/amount fields in a rate object; cope with minor API renames."""
+    preferred = ("totalamount", "total_amount", "totalprice", "total_price", "amount", "price", "rate", "inclusiveamount", "finalamount")
+    values: list[float] = []
+    for key, value in record.items():
+        compact = re.sub(r"[^a-z]", "", key.lower())
+        if any(name.replace("_", "") in compact for name in preferred):
+            if isinstance(value, dict):
+                for nested_key in ("amount", "value", "total", "gross", "inclusiveAmount"):
+                    candidate = number(value.get(nested_key))
+                    if candidate is not None:
+                        values.append(candidate)
+            else:
+                candidate = number(value)
+                if candidate is not None:
+                    values.append(candidate)
+    return values
+
+
+def offer_name(record: dict[str, Any]) -> str:
+    for key in ("ratePlanName", "rateName", "name", "rateCode", "ratePlanCode", "description"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Unnamed rate"
+
+
+def extract_offers(payload: Any) -> list[dict[str, Any]]:
+    """Extract DTX/DKX rates from the captured JSON without assuming one schema."""
+    offers: list[dict[str, Any]] = []
+
+    def visit(node: Any, active_room: str | None = None, inherited_context: list[dict[str, Any]] | None = None) -> None:
+        context = inherited_context or []
+        if isinstance(node, dict):
+            current_room = room_code(node) or active_room
+            next_context = context + [node]
+            if current_room in ROOM_CODES:
+                # Cancellation text belongs to the individual rate.  Do not merge
+                # the parent room object here: it may contain a *different* rate
+                # whose non-refundable policy would wrongly reject this one.
+                if not is_full_stay_nonref(node):
+                    for amount in monetary_values(node):
+                        # Ignore obvious passenger/room counts accidentally named "rate".
+                        if amount >= 100:
+                            offers.append({"room_code": current_room, "room_name": ROOM_CODES[current_room], "rate_name": offer_name(node), "amount": amount})
+            for value in node.values():
+                visit(value, current_room, next_context)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item, active_room, context)
+
+    visit(payload)
+    # The same rate often appears in both a summary and a nested price object.
+    unique: dict[tuple[str, str, float], dict[str, Any]] = {}
+    for offer in offers:
+        unique[(offer["room_code"], offer["rate_name"], offer["amount"])] = offer
+    return sorted(unique.values(), key=lambda item: (item["room_code"], item["amount"], item["rate_name"]))
+
+
+async def submit_existing_search_form(page) -> None:
+    """Fallback only: submit a real form already rendered by Taj, never a calendar UI."""
+    await page.evaluate(
+        """() => {
+            for (const form of document.forms) {
+                try { form.requestSubmit(); } catch (_) { form.submit(); }
+            }
+        }"""
     )
 
 
-def extract_api_rates(data):
-    results = {name: {"member": None, "standard": None} for name in ROOM_NAMES}
-    room_rates = (data.get("roomAvailability") or {}).get("roomRates") or []
+async def capture_availability() -> tuple[Any, dict[str, Any]]:
+    from playwright.async_api import async_playwright
+    diagnostics: dict[str, Any] = {"target_url": target_url(), "seen": []}
+    loop = asyncio.get_running_loop()
+    response_future: asyncio.Future[Any] = loop.create_future()
 
-    for room in room_rates:
-        room_name = TARGET_ROOM_CODES.get(room.get("roomCode"))
-        if not room_name:
-            continue
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        context = await browser.new_context(user_agent=USER_AGENT, locale="en-IN", timezone_id="Asia/Kolkata", viewport={"width": 1440, "height": 1000})
+        page = await context.new_page()
 
-        # Prefer the room rates exactly for the target category. Ignore rates
-        # whose card is explicitly 100% full-stay non-refundable.
-        for rate in room.get("rooms") or []:
-            if rate_is_100pct_nonrefundable(rate):
-                print(
-                    room_name, "|", rate.get("rateCode"),
-                    "-> 100% full-stay non-refundable EXCLUDED",
-                )
-                continue
+        def on_response(response: Any) -> None:
+            url = response.url
+            if "hotel-availability" in url:
+                diagnostics["seen"].append({"url": url, "status": response.status})
+            if AVAILABILITY_PATH in url and response.status == 200 and not response_future.done():
+                response_future.set_result(response)
 
-            member = api_price(rate.get("memberRate"))
-            standard = api_price(rate.get("standardRate"))
-            if member is not None and results[room_name]["member"] is None:
-                results[room_name]["member"] = member
-            if standard is not None and results[room_name]["standard"] is None:
-                results[room_name]["standard"] = standard
-
-            if results[room_name]["member"] is not None and results[room_name]["standard"] is not None:
-                break
-
-        print(
-            room_name,
-            "| Member:", results[room_name]["member"],
-            "| Standard:", results[room_name]["standard"],
-        )
-
-    return results
-
-
-def save_price_history(results, lowest, lowest_room, lowest_type):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    if EXCEL_FILE.exists():
-        wb = load_workbook(EXCEL_FILE)
-        ws = wb.active
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Price History"
-        ws.append([
-            "Date & Time",
-            "Twin Member",
-            "Twin Standard",
-            "King Member",
-            "King Standard",
-            "Lowest Price",
-            "Lowest Room",
-            "Lowest Rate Type",
-        ])
-
-    twin = results.get("SUPERIOR ROOM TWIN BED") or {}
-    king = results.get("SUPERIOR ROOM KING BED") or {}
-    ws.append([
-        now,
-        twin.get("member"),
-        twin.get("standard"),
-        king.get("member"),
-        king.get("standard"),
-        lowest,
-        lowest_room,
-        str(lowest_type).upper(),
-    ])
-
-    for cell in ws[1]:
-        font = copy(cell.font)
-        font.bold = True
-        cell.font = font
-
-    widths = {"A": 20, "B": 15, "C": 15, "D": 15, "E": 15, "F": 15, "G": 30, "H": 18}
-    for col, width in widths.items():
-        ws.column_dimensions[col].width = width
-
-    wb.save(EXCEL_FILE)
-    print("Excel history saved:", EXCEL_FILE)
-
-
-def send_telegram(message):
-    import urllib.parse
-    import urllib.request
-
-    token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        print("Telegram token nahi mila; Telegram skip.")
-        return False
-
-    url = "https://api.telegram.org/bot" + token + "/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": TELEGRAM_CHAT_ID, "text": message}).encode("utf-8")
-    try:
-        req = urllib.request.Request(url, data=data, method="POST")
-        with urllib.request.urlopen(req, timeout=20) as response:
-            response.read()
-        print("Telegram message sent.")
-        return True
-    except Exception as exc:
-        print("Telegram send error:", exc)
-        return False
-
-
-def check_price(p):
-    browser = context = page = None
-    try:
-        print("\n" + "=" * 65)
-        print("TAJ CITY CENTRE GURUGRAM PRICE TRACKER - CLOUD CHECK")
-        print("=" * 65)
-        print("Dates     : 25 Dec 2026 -> 26 Dec 2026")
-        print("Guests    : 1 | Rooms: 1")
-        print("Method    : BROWSER SEARCH -> TAJ AVAILABILITY API RESPONSE")
-        print("Telegram  : Enabled")
-        print("=" * 65)
-
-        browser, context, page = create_browser(p)
-        data = get_taj_api_response(page)
-        results = extract_api_rates(data)
-
-        valid_prices = []
-        for room_name, room_data in results.items():
-            for rate_type in ("member", "standard"):
-                value = room_data.get(rate_type)
-                if value is not None:
-                    valid_prices.append((value, room_name, rate_type))
-
-        if not valid_prices:
-            raise RuntimeError("Superior Twin/King ke liye koi valid price nahi mila.")
-
-        lowest, lowest_room, lowest_type = min(valid_prices, key=lambda x: x[0])
-
-        print("\n" + "=" * 65)
-        print("LOWEST PRICE : ₹{:,.0f} / night".format(lowest))
-        print("ROOM         :", lowest_room)
-        print("RATE TYPE    :", lowest_type.upper())
-        print("=" * 65)
-
-        lines = [
-            "💰 ₹{:,.0f} / NIGHT".format(lowest),
-            "LOWEST PRICE",
-            "",
-            "🏨 Taj City Centre Gurugram",
-            "📅 25 Dec 2026 → 26 Dec 2026",
-            "👤 1 Guest | 1 Room",
-            "",
-        ]
-        for room_name in ROOM_NAMES:
-            d = results.get(room_name) or {}
-            lines.append("🛏 " + room_name)
-            lines.append(
-                "Member Rate: ₹{:,.0f} / night".format(d["member"])
-                if d.get("member") is not None else "Member Rate: Not available"
-            )
-            lines.append(
-                "Standard Rate: ₹{:,.0f} / night".format(d["standard"])
-                if d.get("standard") is not None else "Standard Rate: Not available"
-            )
-            lines.append("")
-        lines.append("❌ 100% full-stay non-refundable rate cards excluded")
-        lines.append("🔗 " + HOTEL_URL)
-        message = "\n".join(lines)
-
-        save_price_history(results, lowest, lowest_room, lowest_type)
-        send_telegram(message)
-        return True
-
-    finally:
-        for obj in (page, context, browser):
+        page.on("response", on_response)
+        try:
+            # Navigation with the target stay often initiates Taj's own availability
+            # request.  This reproduces the browser flow without a date-picker.
+            await page.goto(target_url(), wait_until="domcontentloaded", timeout=60_000)
             try:
-                if obj:
-                    obj.close()
-            except Exception:
-                pass
-        print("Browser closed.")
+                # shield keeps the listener future alive for the form-submit
+                # fallback when the navigation-only wait expires.
+                response = await asyncio.wait_for(asyncio.shield(response_future), timeout=20)
+            except asyncio.TimeoutError:
+                # Do not locate a SEARCH button by text or CSS.  If Taj rendered a
+                # form, submit it natively and wait for the exact verified response.
+                await submit_existing_search_form(page)
+                response = await asyncio.wait_for(asyncio.shield(response_future), timeout=35)
+            diagnostics["captured_url"] = response.url
+            diagnostics["status"] = response.status
+            payload = await response.json()
+            return payload, diagnostics
+        finally:
+            await context.close()
+            await browser.close()
 
 
-with sync_playwright() as p:
-    ok = check_price(p)
-    if not ok:
-        raise SystemExit(1)
+def save_history(offers: Iterable[dict[str, Any]]) -> None:
+    from openpyxl import Workbook, load_workbook
+    headers = ["Checked at (IST)", "Check-in", "Check-out", "Rooms", "Guests", "Room code", "Room", "Rate", "Amount (INR)"]
+    if HISTORY_FILE.exists():
+        workbook = load_workbook(HISTORY_FILE)
+        sheet = workbook.active
+        if [cell.value for cell in sheet[1]] != headers:
+            raise RuntimeError(f"{HISTORY_FILE} has an unexpected header row; refusing to corrupt history.")
+    else:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Price History"
+        sheet.append(headers)
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = "A1:I1"
+    checked_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    for offer in offers:
+        sheet.append([checked_at, CHECK_IN, CHECK_OUT, 1, 1, offer["room_code"], offer["room_name"], offer["rate_name"], offer["amount"]])
+    for column in sheet.columns:
+        letter = column[0].column_letter
+        sheet.column_dimensions[letter].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 42)
+    workbook.save(HISTORY_FILE)
+
+
+def send_telegram(offers: list[dict[str, Any]]) -> None:
+    import requests
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHATID")
+    if not token or not chat_id:
+        print("Telegram skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured.")
+        return
+    lines = ["Taj City Centre Gurugram", f"{CHECK_IN} → {CHECK_OUT} | 1 room | 1 guest"]
+    for code in ROOM_CODES:
+        matching = [offer for offer in offers if offer["room_code"] == code]
+        if matching:
+            best = min(matching, key=lambda item: item["amount"])
+            lines.append(f"{code} — {best['room_name']}: ₹{best['amount']:,.0f} ({best['rate_name']})")
+        else:
+            lines.append(f"{code} — no eligible rate returned")
+    response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": "\n".join(lines)}, timeout=20)
+    response.raise_for_status()
+    print("Telegram message sent.")
+
+
+async def main() -> None:
+    try:
+        payload, diagnostics = await capture_availability()
+        offers = extract_offers(payload)
+        diagnostics["eligible_rates"] = offers
+        DEBUG_FILE.write_text(json.dumps(diagnostics, indent=2, ensure_ascii=False), encoding="utf-8")
+        if not offers:
+            raise RuntimeError("Verified availability response was captured, but no eligible DTX/DKX rate was found.")
+        save_history(offers)
+        for offer in offers:
+            print(f"{offer['room_code']} | ₹{offer['amount']:,.0f} | {offer['rate_name']}")
+        try:
+            send_telegram(offers)
+        except Exception as exc:
+            # Preserve price history when Telegram alone has a temporary failure.
+            print(f"Telegram failed after history was saved: {exc}", file=sys.stderr)
+    except Exception as exc:
+        DEBUG_FILE.write_text(json.dumps({"error": str(exc), "target_url": target_url()}, indent=2), encoding="utf-8")
+        raise
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
