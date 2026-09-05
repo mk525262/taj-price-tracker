@@ -1090,7 +1090,7 @@ def get_taj_api_response(page, context):
     captured = {"headers": None, "url": None, "body": None}
 
     def capture_request(req):
-        if TAJ_API_HOST in req.url and TAJ_API_PATH in req.url and req.method == "POST":
+        if TAJ_API_HOST in req.url:
             if captured["headers"] is None:
                 captured["headers"] = req.all_headers()
                 captured["url"] = req.url
@@ -1102,10 +1102,10 @@ def get_taj_api_response(page, context):
     # request, establishing the browser cookies/session and giving us the exact
     # browser headers required by the security layer.
     page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(7000)
+    page.wait_for_timeout(12000)
 
     if not captured["headers"]:
-        raise RuntimeError("Taj availability API request browser se capture nahi hui.")
+        raise RuntimeError("Taj API request browser se capture nahi hui.")
 
     print("Taj browser API request captured.")
     print("Original API URL:", captured["url"])
