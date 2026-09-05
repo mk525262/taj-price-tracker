@@ -1,9 +1,9 @@
 name: Taj Price Tracker
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "30 4 * * *" # 10:00 Asia/Kolkata (UTC+5:30)
 
 permissions:
   contents: write
@@ -11,31 +11,45 @@ permissions:
 jobs:
   check-price:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
+          python -m playwright install --with-deps chromium
 
       - name: Run Taj price tracker
         env:
-          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
-        run: |
-          python taj_tracker.py
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python taj_tracker.py
 
       - name: Save Excel history
+        if: always()
         run: |
+          if [ ! -f Taj_Price_History.xlsx ]; then
+            echo "No Excel history was created; nothing to commit."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Taj_Price_History.xlsx
-          git diff --cached --quiet || git commit -m "Update Taj price history"
+          git diff --cached --quiet && exit 0
+          git commit -m "Update Taj price history"
           git push
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: taj-tracker-diagnostics
+          path: taj_tracker_debug.json
+          if-no-files-found: ignore
