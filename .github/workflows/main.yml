@@ -3,7 +3,7 @@ name: Taj Price Tracker
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *" # 10:00 Asia/Kolkata (UTC+5:30)
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: write
@@ -28,8 +28,7 @@ jobs:
 
       - name: Run Taj price tracker
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: python taj_tracker.py
 
       - name: Save Excel history
