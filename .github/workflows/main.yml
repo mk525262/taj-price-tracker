@@ -30,7 +30,7 @@ jobs:
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
-          python taj_tracker
+          python taj_tracker.py
 
       - name: Save Excel history
         run: |
