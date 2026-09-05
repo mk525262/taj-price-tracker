@@ -9,8 +9,7 @@ from openpyxl import Workbook, load_workbook
 CHECK_IN = "2026-12-25"
 CHECK_OUT = "2026-12-26"
 HOTEL_URL = "https://www.tajhotels.com/en-in/hotels/taj-city-centre-gurugram"
-TAJ_API_HOST = "api-cug1-825v2.tajhotels.com"
-TAJ_API_PATH = "/hudiniService/v1/hotel-availability"
+TAJ_API_URL = "https://api-cug1-825v2.tajhotels.com/hudiniService/v1/hotel-availability"
 ROOM_CODES = {"DTX": "SUPERIOR ROOM TWIN BED", "DKX": "SUPERIOR ROOM KING BED"}
 TELEGRAM_CHAT_ID = "348797661"
 EXCEL_FILE = Path("Taj_Price_History.xlsx")
@@ -21,10 +20,38 @@ def target_url():
     return HOTEL_URL + f"?adults=1&children=0&rooms=1&from={CHECK_IN}&to={CHECK_OUT}"
 
 
+def api_payload():
+    return {
+        "endDate": CHECK_OUT,
+        "numRooms": 1,
+        "adults": 1,
+        "children": 0,
+        "startDate": CHECK_IN,
+        "hotelId": "d21c3bf6-f508-47ae-a456-540429b02b0d",
+        "rateFilter": "RRM,PKG,MD",
+        "memberTier": "member",
+        "package": "PKG",
+        "isOfferLandingPage": False,
+        "rateCode": None,
+        "promoCode": None,
+        "promoType": None,
+        "couponCode": None,
+        "agentId": None,
+        "agentType": None,
+        "isMyAccount": False,
+        "isCorporate": False,
+        "isLogin": False,
+        "isMemberOffer1": False,
+        "isMemberOffer2": False,
+        "forSomeoneElse": False,
+        "isEmployeeOffer": False,
+    }
+
+
 def api_response_filter(response):
     if response.request.method != "POST":
         return False
-    if TAJ_API_HOST not in response.url or TAJ_API_PATH not in response.url:
+    if "api-cug1-825v2.tajhotels.com" not in response.url or "/hudiniService/v1/hotel-availability" not in response.url:
         return False
     try:
         body = response.request.post_data
@@ -34,6 +61,32 @@ def api_response_filter(response):
     except Exception:
         pass
     return True
+
+
+def browser_direct_api_fetch(page):
+    """Fallback: make the verified availability POST from inside Chromium."""
+    payload = api_payload()
+    script = """
+    async ({url, payload}) => {
+      const r = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      const text = await r.text();
+      return {status: r.status, text};
+    }
+    """
+    result = page.evaluate(script, {"url": TAJ_API_URL, "payload": payload})
+    status = int(result.get("status", 0))
+    print("Browser direct Taj API HTTP:", status)
+    if status != 200:
+        raise RuntimeError(f"Browser direct Taj API failed: HTTP {status} | {result.get('text', '')[:300]}")
+    return json.loads(result["text"])
 
 
 def parse_price(rate):
@@ -159,7 +212,7 @@ def check_price():
             print("TAJ CITY CENTRE GURUGRAM PRICE TRACKER - CLOUD CHECK")
             print("Dates     : 25 Dec 2026 -> 26 Dec 2026")
             print("Guests    : 1 | Rooms: 1")
-            print("Method    : BROWSER BOOK NOW/SEARCH -> VERIFIED AVAILABILITY API")
+            print("Method    : BROWSER TRIGGER + VERIFIED AVAILABILITY API")
             print("=" * 65)
             print("Taj hotel page load kar raha hoon...")
             page.goto(target_url(), wait_until="domcontentloaded", timeout=60000)
@@ -174,12 +227,19 @@ def check_price():
                 if click_exact_text(page, "SEARCH"):
                     diagnostics["trigger"] = "SEARCH"
                 else:
-                    raise RuntimeError("Taj par BOOK NOW aur SEARCH dono visible controls nahi mile.")
+                    print("No visible trigger found. Verified API ko isi Chromium browser se direct POST kar raha hoon...")
+                    diagnostics["trigger"] = "BROWSER_DIRECT_API"
+                    try:
+                        captured["data"] = browser_direct_api_fetch(page)
+                    except Exception as exc:
+                        diagnostics["direct_api_error"] = str(exc)
+                        raise
 
-            for _ in range(60):
-                if captured["data"] is not None:
-                    break
-                page.wait_for_timeout(1000)
+            if captured["data"] is None:
+                for _ in range(60):
+                    if captured["data"] is not None:
+                        break
+                    page.wait_for_timeout(1000)
             if captured["data"] is None:
                 raise RuntimeError("Taj verified hotel-availability API response capture nahi hui after trigger.")
 
