@@ -35,7 +35,7 @@ def create_browser(p):
     print("Fresh browser open kar raha hoon...")
 
     browser = p.chromium.launch(
-        headless=False,
+        headless=True,
         args=["--deny-permission-prompts"]
     )
 
