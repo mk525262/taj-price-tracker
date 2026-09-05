@@ -13,16 +13,15 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import Any, Iterable
 from urllib.parse import urlencode
-
-if TYPE_CHECKING:
-    from playwright.async_api import Response
 
 CHECK_IN = "2026-12-25"
 CHECK_OUT = "2026-12-26"
 ROOM_CODES = {"DTX": "Superior Room Twin Bed", "DKX": "Superior Room King Bed"}
 HOTEL_URL = "https://www.tajhotels.com/en-in/hotels/taj-city-centre-gurugram"
+# Read from Taj's own public BOOK NOW link on the hotel page, 5 Sep 2026.
+HOTEL_ID = "d21c3bf6-f508-47ae-a456-540429b02b0d"
 AVAILABILITY_PATH = "api-cug1-825v2.tajhotels.com/hudiniService/v1/hotel-availability"
 HISTORY_FILE = Path("Taj_Price_History.xlsx")
 DEBUG_FILE = Path("taj_tracker_debug.json")
@@ -142,17 +141,6 @@ def extract_offers(payload: Any) -> list[dict[str, Any]]:
     return sorted(unique.values(), key=lambda item: (item["room_code"], item["amount"], item["rate_name"]))
 
 
-async def submit_existing_search_form(page) -> None:
-    """Fallback only: submit a real form already rendered by Taj, never a calendar UI."""
-    await page.evaluate(
-        """() => {
-            for (const form of document.forms) {
-                try { form.requestSubmit(); } catch (_) { form.submit(); }
-            }
-        }"""
-    )
-
-
 async def capture_availability() -> tuple[Any, dict[str, Any]]:
     from playwright.async_api import async_playwright
     diagnostics: dict[str, Any] = {"target_url": target_url(), "seen": []}
@@ -173,22 +161,25 @@ async def capture_availability() -> tuple[Any, dict[str, Any]]:
 
         page.on("response", on_response)
         try:
-            # Navigation with the target stay often initiates Taj's own availability
-            # request.  This reproduces the browser flow without a date-picker.
+            # Taj ignores date query parameters until its booking flow is entered.
+            # The hotel page's top-level BOOK NOW control preserves the requested
+            # stay and opens the booking landing page, which creates the verified
+            # availability request.  This is not a calendar or SEARCH selector.
             await page.goto(target_url(), wait_until="domcontentloaded", timeout=60_000)
-            try:
-                # shield keeps the listener future alive for the form-submit
-                # fallback when the navigation-only wait expires.
-                response = await asyncio.wait_for(asyncio.shield(response_future), timeout=20)
-            except asyncio.TimeoutError:
-                # Do not locate a SEARCH button by text or CSS.  If Taj rendered a
-                # form, submit it natively and wait for the exact verified response.
-                await submit_existing_search_form(page)
-                response = await asyncio.wait_for(asyncio.shield(response_future), timeout=35)
+            booking_trigger = page.get_by_role("button", name="BOOK NOW", exact=True).first
+            await booking_trigger.wait_for(state="visible", timeout=20_000)
+            await booking_trigger.click(timeout=20_000)
+            diagnostics["booking_url"] = page.url
+            response = await asyncio.wait_for(asyncio.shield(response_future), timeout=45)
             diagnostics["captured_url"] = response.url
             diagnostics["status"] = response.status
             payload = await response.json()
             return payload, diagnostics
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(
+                "Taj booking flow opened but the verified hotel-availability response did not arrive. "
+                f"Diagnostics: {json.dumps(diagnostics)}"
+            ) from exc
         finally:
             await context.close()
             await browser.close()
