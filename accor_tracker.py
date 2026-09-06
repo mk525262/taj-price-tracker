@@ -29,19 +29,18 @@ def main():
         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(12000)
 
-        # Try the booking/rate controls if the page has not triggered the availability service.
         if not captured:
             for text in ["See availabilities", "Check prices", "See rates", "Check availability", "Book"]:
                 try:
                     loc = page.get_by_text(text, exact=False).first
                     if loc.is_visible(timeout=1500):
                         print("CLICKING:", text, flush=True)
-                        loc.click(timeout=5000)
-                        page.wait_for_timeout(10000)
+                        loc.evaluate("el => el.click()")
+                        page.wait_for_timeout(12000)
                         if captured:
                             break
                 except Exception as e:
-                    print("CLICK FAILED:", text, str(e)[:200], flush=True)
+                    print("CLICK FAILED:", text, str(e)[:300], flush=True)
 
         if not captured:
             raise RuntimeError("No Accor availability API request was captured")
