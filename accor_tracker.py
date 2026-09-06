@@ -22,7 +22,7 @@ def main():
                 if "availability" in req.url and not any(x[0] == req.url for x in captured):
                     captured.append((req.url, req.all_headers()))
 
-        page.on("request", on_request)
+        context.on("request", on_request)
 
         target_url = HOTEL_URL + "?dateIn=" + CHECKIN + "&dateOut=" + CHECKOUT + "&compositions=1&stayplus=false"
         print("OPENING:", target_url, flush=True)
