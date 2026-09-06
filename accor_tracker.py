@@ -1,36 +1,34 @@
 from playwright.sync_api import sync_playwright
-from datetime import date
 import json
 
 HOTEL_ID = "6529"  # ibis Jaipur City Centre
 CHECKIN = "2026-12-25"
 CHECKOUT = "2026-12-26"
-HOTEL_URL = f"https://all.accor.com/hotel/{HOTEL_ID}/index.en.shtml"
+HOTEL_URL = f"https://all.accor.com/hotel/{HOTEL_ID}/index.in.shtml"
 
 
 def main():
-    graphql_responses = []
+    offers_payload = None
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        context = browser.new_context(locale="en-IN")
         page = context.new_page()
 
-        def on_request(req):
-            if "api.accor.com/bff/v1/graphql" in req.url:
-                print("GRAPHQL REQUEST", req.method, flush=True)
-                print("POST DATA:", (req.post_data or "")[:10000], flush=True)
-
         def on_response(resp):
-            if "api.accor.com/bff/v1/graphql" in resp.url:
-                try:
-                    text = resp.text()
-                    print("GRAPHQL RESPONSE HTTP:", resp.status, "BYTES:", len(text), flush=True)
-                    print("GRAPHQL RESPONSE SAMPLE:", text[:15000], flush=True)
-                    graphql_responses.append({"status": resp.status, "url": resp.url, "body": text})
-                except Exception as e:
-                    print("GRAPHQL RESPONSE READ ERROR:", str(e), flush=True)
+            nonlocal offers_payload
+            if "api.accor.com/bff/v1/graphql" not in resp.url:
+                return
+            try:
+                data = resp.json()
+                hot = data.get("data", {}).get("hotelOffers", {}) if isinstance(data, dict) else {}
+                offers = hot.get("offersSelection", {}).get("offers") if isinstance(hot, dict) else None
+                if offers:
+                    offers_payload = data
+                    print("HOTEL OFFERS RESPONSE HTTP:", resp.status, flush=True)
+                    print("OFFER COUNT:", len(offers), flush=True)
+            except Exception:
+                pass
 
-        context.on("request", on_request)
         context.on("response", on_response)
 
         target_url = HOTEL_URL + "?dateIn=" + CHECKIN + "&dateOut=" + CHECKOUT + "&compositions=1&stayplus=false"
@@ -38,7 +36,6 @@ def main():
         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(12000)
 
-        # The hotel page exposes a "See availabilities" link which starts the live booking flow.
         try:
             loc = page.get_by_text("See availabilities", exact=False).first
             if loc.is_visible(timeout=1500):
@@ -48,13 +45,39 @@ def main():
         except Exception as e:
             print("CLICK FAILED:", str(e)[:500], flush=True)
 
-        if not graphql_responses:
-            raise RuntimeError("No Accor GraphQL availability responses were captured")
+        if not offers_payload:
+            raise RuntimeError("Accor HotelPageHot offers response was not captured")
+
+        offers = offers_payload["data"]["hotelOffers"]["offersSelection"]["offers"]
+        rows = []
+        for offer in offers:
+            pricing = offer.get("pricing", {}).get("main", {}) or {}
+            categories = offer.get("categories", []) or []
+            product = offer.get("product", {}) or {}
+            rate = offer.get("rate", {}) or {}
+            meal = offer.get("mealPlan", {}) or {}
+            policies = pricing.get("simplifiedPolicies", {}) or {}
+            rows.append({
+                "product_id": product.get("id"),
+                "rate": rate.get("label"),
+                "rate_id": rate.get("id"),
+                "member": "MEMBER_RATE" in (pricing.get("categories") or []),
+                "price": pricing.get("amount"),
+                "currency": pricing.get("currency"),
+                "formatted": pricing.get("formattedAmount"),
+                "meal": meal.get("label") or meal.get("code"),
+                "cancellation": (policies.get("cancellation") or {}).get("label"),
+                "guarantee": (policies.get("guarantee") or {}).get("label"),
+                "offer_id": offer.get("id"),
+            })
+
+        print("\nACCOR OFFERS SUMMARY:", flush=True)
+        for row in rows:
+            print(json.dumps(row, ensure_ascii=False), flush=True)
 
         with open("accor_debug.json", "w", encoding="utf-8") as f:
-            json.dump(graphql_responses, f, ensure_ascii=False, indent=2)
+            json.dump({"variables": "captured by Accor page", "offers": rows}, f, ensure_ascii=False, indent=2)
 
-        print("TOTAL GRAPHQL RESPONSES:", len(graphql_responses), flush=True)
         browser.close()
 
 
