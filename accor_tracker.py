@@ -2,7 +2,6 @@ from playwright.sync_api import sync_playwright
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
 from pathlib import Path
-import json
 import os
 import requests
 
@@ -47,43 +46,40 @@ def save_history(rows):
     for row in rows:
         ws.append([
             now, CHECKIN, CHECKOUT, HOTEL_NAME, row["room"],
-            row["member_price"], row["standard_price"], row["rate"], row["meal"],
+            row["member_price_inr"], row["standard_price_inr"], row["rate"], row["meal"],
             row["cancellation"], row["guarantee"], "YES" if row["eligible"] else "NO"
         ])
     wb.save(HISTORY_FILE)
     print(f"Excel history saved: {HISTORY_FILE}", flush=True)
 
 
+def find_value(obj, wanted_key):
+    if isinstance(obj, dict):
+        if wanted_key in obj and isinstance(obj[wanted_key], (int, float)):
+            return obj[wanted_key]
+        for value in obj.values():
+            found = find_value(value, wanted_key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = find_value(value, wanted_key)
+            if found is not None:
+                return found
+    return None
+
+
 def main():
     hot = None
     cold = None
+    basket_inr = None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(locale="en-IN")
 
-        # GitHub runners can be outside India. Accor documents countryMarket and
-        # currency as pricing inputs, so force the Indian market and INR.
-        def route_graphql(route):
-            req = route.request
-            if "bff/v1/graphql" not in req.url:
-                route.continue_()
-                return
-            try:
-                payload = req.post_data_json()
-                if payload.get("operationName") == "HotelPageHot":
-                    payload["variables"]["countryMarket"] = "IN"
-                    payload["variables"]["currency"] = "INR"
-                    route.continue_(post_data=json.dumps(payload))
-                    return
-            except Exception:
-                pass
-            route.continue_()
-
-        context.route("**/api.accor.com/bff/v1/graphql", route_graphql)
-
         def on_response(resp):
-            nonlocal hot, cold
+            nonlocal hot, cold, basket_inr
             if "api.accor.com/bff/v1/graphql" not in resp.url:
                 return
             try:
@@ -98,6 +94,12 @@ def main():
                 accommodations = data.get("data", {}).get("hotel", {}).get("accommodations")
                 if accommodations is not None:
                     cold = data
+                # Accor's booking basket returns the exact INR hotel-currency total
+                # even when the offer-search response is returned in another currency.
+                basket_total = find_value(data, "totalAmountHotelCurrency")
+                if basket_total is not None:
+                    basket_inr = basket_total
+                    print(f"Accor basket INR total captured: ₹{basket_inr:,.2f}", flush=True)
             except Exception:
                 pass
 
@@ -152,8 +154,8 @@ def main():
                 "product": product_id,
                 "room": room_names.get(product_id, product_id or "ROOM"),
                 "member": member,
-                "member_price": main.get("amount"),
-                "standard_price": alternative.get("amount") if alternative.get("categories") == ["STANDARD"] else None,
+                "member_price_eur": main.get("amount"),
+                "standard_price_eur": alternative.get("amount") if alternative.get("categories") == ["STANDARD"] else None,
                 "currency": pricing.get("currency"),
                 "rate": rate.get("label") or rate.get("id"),
                 "meal": meal.get("label") or meal.get("code") or "Room only",
@@ -162,35 +164,45 @@ def main():
                 "eligible": eligible,
             })
 
-        if not parsed or parsed[0].get("currency") != "INR":
-            currencies = sorted({x.get("currency") for x in parsed if x.get("currency")})
-            raise RuntimeError(f"Expected INR pricing, got {currencies}")
-
         eligible_members = [
             x for x in parsed
-            if x["member"] and x["eligible"] and isinstance(x["member_price"], (int, float))
+            if x["member"] and x["eligible"] and isinstance(x["member_price_eur"], (int, float))
         ]
         if not eligible_members:
             raise RuntimeError("No eligible Accor member room offer found")
 
+        # The live Accor page returned EUR to the GitHub runner. The booking basket
+        # simultaneously returned the exact INR hotel-currency total for the first
+        # displayed offer, so derive the live EUR->INR factor from that same basket.
+        first_offer_eur = next((x["member_price_eur"] for x in parsed if isinstance(x["member_price_eur"], (int, float))), None)
+        if not basket_inr or not first_offer_eur:
+            raise RuntimeError("Could not capture Accor basket INR conversion")
+        eur_to_inr = basket_inr / first_offer_eur
+        print(f"Live Accor EUR→INR factor: {eur_to_inr:.6f}", flush=True)
+
         best_by_room = {}
         for row in eligible_members:
+            row["member_price_inr"] = round(row["member_price_eur"] * eur_to_inr, 2)
+            row["standard_price_inr"] = (
+                round(row["standard_price_eur"] * eur_to_inr, 2)
+                if isinstance(row["standard_price_eur"], (int, float)) else None
+            )
             key = row["product"]
-            if key not in best_by_room or row["member_price"] < best_by_room[key]["member_price"]:
+            if key not in best_by_room or row["member_price_inr"] < best_by_room[key]["member_price_inr"]:
                 best_by_room[key] = row
 
-        final_rows = sorted(best_by_room.values(), key=lambda x: x["member_price"])
+        final_rows = sorted(best_by_room.values(), key=lambda x: x["member_price_inr"])
         lowest = final_rows[0]
 
         print("\nACCOR ELIGIBLE ROOMS:", flush=True)
         for row in final_rows:
-            standard = f"₹{row['standard_price']:,.0f}" if row["standard_price"] is not None else "N/A"
+            standard = f"₹{row['standard_price_inr']:,.0f}" if row["standard_price_inr"] is not None else "N/A"
             print(
-                f"{row['room']} | Member ₹{row['member_price']:,.0f} | "
+                f"{row['room']} | Member ₹{row['member_price_inr']:,.0f} | "
                 f"Standard {standard} | {row['rate']} | {row['meal']}",
                 flush=True,
             )
-        print(f"LOWEST PRICE : ₹{lowest['member_price']:,.0f} / night", flush=True)
+        print(f"LOWEST PRICE : ₹{lowest['member_price_inr']:,.0f} / night", flush=True)
         print(f"ROOM : {lowest['room']}", flush=True)
         print("RATE TYPE : MEMBER", flush=True)
 
@@ -202,9 +214,9 @@ def main():
             f"👤 {ADULTS} Adult | {ROOMS} Room\n\n"
         )
         for row in final_rows:
-            standard = f"₹{row['standard_price']:,.0f}" if row["standard_price"] is not None else "N/A"
-            msg += f"{row['room']}\nMember: ₹{row['member_price']:,.0f}\nStandard: {standard}\n\n"
-        msg += f"Lowest eligible: ₹{lowest['member_price']:,.0f} ({lowest['room']})"
+            standard = f"₹{row['standard_price_inr']:,.0f}" if row["standard_price_inr"] is not None else "N/A"
+            msg += f"{row['room']}\nMember: ₹{row['member_price_inr']:,.0f}\nStandard: {standard}\n\n"
+        msg += f"Lowest eligible: ₹{lowest['member_price_inr']:,.0f} ({lowest['room']})"
         send_telegram(msg)
         print("Telegram message sent.", flush=True)
         browser.close()
