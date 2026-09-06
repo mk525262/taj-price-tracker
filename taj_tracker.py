@@ -9,7 +9,6 @@ from openpyxl import Workbook, load_workbook
 CHECK_IN = "2026-12-25"
 CHECK_OUT = "2026-12-26"
 HOTEL_URL = "https://www.tajhotels.com/en-in/hotels/taj-city-centre-gurugram"
-TAJ_API_URL = "https://api-cug1-825v2.tajhotels.com/hudiniService/v1/hotel-availability"
 ROOM_CODES = {"DTX": "SUPERIOR ROOM TWIN BED", "DKX": "SUPERIOR ROOM KING BED"}
 TELEGRAM_CHAT_ID = "348797661"
 EXCEL_FILE = Path("Taj_Price_History.xlsx")
@@ -18,34 +17,6 @@ DEBUG_FILE = Path("taj_tracker_debug.json")
 
 def target_url():
     return HOTEL_URL + f"?adults=1&children=0&rooms=1&from={CHECK_IN}&to={CHECK_OUT}"
-
-
-def api_payload():
-    return {
-        "endDate": CHECK_OUT,
-        "numRooms": 1,
-        "adults": 1,
-        "children": 0,
-        "startDate": CHECK_IN,
-        "hotelId": "d21c3bf6-f508-47ae-a456-540429b02b0d",
-        "rateFilter": "RRM,PKG,MD",
-        "memberTier": "member",
-        "package": "PKG",
-        "isOfferLandingPage": False,
-        "rateCode": None,
-        "promoCode": None,
-        "promoType": None,
-        "couponCode": None,
-        "agentId": None,
-        "agentType": None,
-        "isMyAccount": False,
-        "isCorporate": False,
-        "isLogin": False,
-        "isMemberOffer1": False,
-        "isMemberOffer2": False,
-        "forSomeoneElse": False,
-        "isEmployeeOffer": False,
-    }
 
 
 def api_response_filter(response):
@@ -61,27 +32,6 @@ def api_response_filter(response):
     except Exception:
         pass
     return True
-
-
-def browser_direct_api_fetch(page):
-    """Fallback: use Playwright's browser-context request, sharing the browser cookies."""
-    payload = api_payload()
-    headers = {
-        "accept": "application/json, text/plain, */*",
-        "content-type": "application/json",
-        "origin": "https://www.tajhotels.com",
-        "referer": target_url(),
-        "user-agent": page.evaluate("navigator.userAgent"),
-        "sec-ch-ua": page.evaluate("navigator.userAgentData ? navigator.userAgentData.brands.map(x => `\\\"${x.brand}\\\";v=\\\"${x.version}\\\"`).join(', ') : ''"),
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\\\"Linux\\\"",
-    }
-    result = page.context.request.post(TAJ_API_URL, data=payload, headers=headers, timeout=60000)
-    print("Browser-context Taj API HTTP:", result.status)
-    text = result.text()
-    if result.status != 200:
-        raise RuntimeError(f"Browser-context Taj API failed: HTTP {result.status} | {text[:500]}")
-    return json.loads(text)
 
 
 def parse_price(rate):
@@ -129,19 +79,25 @@ def extract_rates(data):
     return found
 
 
-def click_exact_text(page, text):
+def click_text_contains(page, text):
+    """Find a visible clickable element whose rendered text contains the target."""
     js = """(wanted) => {
       const nodes = Array.from(document.querySelectorAll('a,button,[role=\"button\"],div,span'));
       const visible = nodes.filter(el => {
         const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-        return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
-          && (el.innerText || '').trim().toUpperCase() === wanted;
+        const t = (el.innerText || el.textContent || '').replace(/\\s+/g,' ').trim().toUpperCase();
+        return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && t.includes(wanted);
       });
       visible.sort((a,b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-      if (!visible.length) return false;
-      visible[0].scrollIntoView({block:'center'});
-      visible[0].click();
-      return true;
+      for (const el of visible) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          el.scrollIntoView({block:'center'});
+          el.click();
+          return true;
+        }
+      }
+      return false;
     }"""
     try:
         return bool(page.evaluate(js, text.upper()))
@@ -211,28 +167,26 @@ def check_price():
             print("=" * 65)
             print("Taj hotel page load kar raha hoon...")
             page.goto(target_url(), wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(7000)
             print("Hotel page loaded:", page.url)
 
             print("BOOK NOW trigger try kar raha hoon...")
-            if click_exact_text(page, "BOOK NOW"):
+            if click_text_contains(page, "BOOK NOW"):
                 diagnostics["trigger"] = "BOOK NOW"
             else:
                 print("BOOK NOW nahi mila; SEARCH fallback try kar raha hoon...")
-                if click_exact_text(page, "SEARCH"):
+                if click_text_contains(page, "SEARCH"):
                     diagnostics["trigger"] = "SEARCH"
                 else:
-                    print("No visible trigger found. Verified API ko browser-context request se direct POST kar raha hoon...")
-                    diagnostics["trigger"] = "BROWSER_CONTEXT_API"
-                    captured["data"] = browser_direct_api_fetch(page)
+                    diagnostics["trigger"] = "NONE"
+                    raise RuntimeError("Taj page par BOOK NOW/SEARCH visible trigger nahi mila; direct API fallback intentionally disabled because Taj WAF returns 403.")
 
+            for _ in range(60):
+                if captured["data"] is not None:
+                    break
+                page.wait_for_timeout(1000)
             if captured["data"] is None:
-                for _ in range(60):
-                    if captured["data"] is not None:
-                        break
-                    page.wait_for_timeout(1000)
-            if captured["data"] is None:
-                raise RuntimeError("Taj verified hotel-availability API response capture nahi hui after trigger.")
+                raise RuntimeError("Taj verified hotel-availability API response capture nahi hui after UI trigger.")
 
             Path("taj_last_api_response.json").write_text(json.dumps(captured["data"], ensure_ascii=False, indent=2), encoding="utf-8")
             rates = extract_rates(captured["data"])
