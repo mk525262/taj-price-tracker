@@ -9,6 +9,13 @@ on:
   schedule:
     - cron: "*/30 * * * *"
 
+permissions:
+  contents: write
+
+concurrency:
+  group: accor-ibis-jaipur
+  cancel-in-progress: false
+
 jobs:
   check-accor:
     runs-on: ubuntu-latest
@@ -25,13 +32,15 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
-      - name: Discover Accor availability API
+      - name: Check Ibis Jaipur price
+        env:
+          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: python accor_tracker.py
 
-      - name: Upload Accor diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: accor-debug
-          path: accor_debug.json
-          if-no-files-found: ignore
+      - name: Commit Excel price history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Accor_Ibis_Jaipur_Price_History.xlsx
+          git diff --cached --quiet || git commit -m "Update Ibis Jaipur price history"
+          git push
