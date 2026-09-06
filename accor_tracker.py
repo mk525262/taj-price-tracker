@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import os
 import requests
+import json
 
 HOTEL_ID = "6529"
 HOTEL_NAME = "ibis Jaipur City Centre"
@@ -20,11 +21,7 @@ def send_telegram(message):
     token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TAJ_TELEGRAM_BOT_TOKEN secret is missing")
-    r = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data={"chat_id": TELEGRAM_CHAT_ID, "text": message},
-        timeout=30,
-    )
+    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
     r.raise_for_status()
 
 
@@ -36,18 +33,10 @@ def save_history(rows):
         wb = Workbook()
         ws = wb.active
         ws.title = "Price History"
-        ws.append([
-            "Check Time", "Check-in", "Check-out", "Hotel", "Room",
-            "Member Price (INR)", "Standard Price (INR)", "Rate", "Meal Plan",
-            "Cancellation", "Guarantee", "Eligible"
-        ])
+        ws.append(["Check Time", "Check-in", "Check-out", "Hotel", "Room", "Member Price (INR)", "Standard Price (INR)", "Rate", "Meal Plan", "Cancellation", "Guarantee", "Eligible"])
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for row in rows:
-        ws.append([
-            now, CHECKIN, CHECKOUT, HOTEL_NAME, row["room"],
-            row["member_price_inr"], row["standard_price_inr"], row["rate"], row["meal"],
-            row["cancellation"], row["guarantee"], "YES" if row["eligible"] else "NO"
-        ])
+        ws.append([now, CHECKIN, CHECKOUT, HOTEL_NAME, row["room"], row["member_price_inr"], row["standard_price_inr"], row["rate"], row["meal"], row["cancellation"], row["guarantee"], "YES" if row["eligible"] else "NO"])
     wb.save(HISTORY_FILE)
     print(f"Excel history saved: {HISTORY_FILE}", flush=True)
 
@@ -77,6 +66,23 @@ def main():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(locale="en-IN")
 
+        # Force India/INR in the exact GraphQL payload sent by the Accor booking page.
+        def route_graphql(route):
+            req = route.request
+            if "api.accor.com/bff/v1/graphql" not in req.url:
+                route.continue_()
+                return
+            raw = req.post_data or ""
+            if "HotelPageHot" in raw:
+                raw = raw.replace('"countryMarket":"GB"', '"countryMarket":"IN"')
+                raw = raw.replace('"currency":"EUR"', '"currency":"INR"')
+                print("Accor GraphQL market override: IN / INR", flush=True)
+                route.continue_(post_data=raw)
+            else:
+                route.continue_()
+
+        context.route("**/api.accor.com/bff/v1/graphql", route_graphql)
+
         def on_response(resp):
             nonlocal hot, cold, basket_inr
             try:
@@ -93,7 +99,6 @@ def main():
                     accommodations = data.get("data", {}).get("hotel", {}).get("accommodations")
                     if accommodations is not None:
                         cold = data
-                # Basket may be served by a separate Accor endpoint.
                 if "basket" in url.lower():
                     try:
                         data = resp.json()
@@ -147,17 +152,14 @@ def main():
             cancellation = (policies.get("cancellation") or {}).get("label") or ""
             guarantee = (policies.get("guarantee") or {}).get("label") or ""
             member = "MEMBER_RATE" in (main.get("categories") or [])
-            eligible = not (
-                cancellation.lower() == "non-refundable"
-                and guarantee.lower() in {"online payment", "prepaid"}
-            )
+            eligible = not (cancellation.lower() == "non-refundable" and guarantee.lower() in {"online payment", "prepaid"})
             product_id = (offer.get("product") or {}).get("id")
             parsed.append({
                 "product": product_id,
                 "room": room_names.get(product_id, product_id or "ROOM"),
                 "member": member,
-                "member_price_eur": main.get("amount"),
-                "standard_price_eur": alternative.get("amount") if alternative.get("categories") == ["STANDARD"] else None,
+                "member_price": main.get("amount"),
+                "standard_price": alternative.get("amount") if alternative.get("categories") == ["STANDARD"] else None,
                 "currency": pricing.get("currency"),
                 "rate": rate.get("label") or rate.get("id"),
                 "meal": meal.get("label") or meal.get("code") or "Room only",
@@ -166,20 +168,25 @@ def main():
                 "eligible": eligible,
             })
 
-        eligible_members = [x for x in parsed if x["member"] and x["eligible"] and isinstance(x["member_price_eur"], (int, float))]
+        eligible_members = [x for x in parsed if x["member"] and x["eligible"] and isinstance(x["member_price"], (int, float))]
         if not eligible_members:
             raise RuntimeError("No eligible Accor member room offer found")
 
-        first_offer_eur = next((x["member_price_eur"] for x in parsed if isinstance(x["member_price_eur"], (int, float))), None)
-        if not basket_inr or not first_offer_eur:
-            raise RuntimeError("Could not capture Accor basket INR conversion")
-        eur_to_inr = basket_inr / first_offer_eur
-        print(f"Live Accor EUR→INR factor: {eur_to_inr:.6f}", flush=True)
+        # If Accor accepted the market override, prices are already INR. Otherwise use the live basket conversion.
+        currencies = sorted({x.get("currency") for x in parsed if x.get("currency")})
+        if currencies == ["INR"]:
+            eur_to_inr = 1.0
+        else:
+            first_offer_price = next((x["member_price"] for x in parsed if isinstance(x["member_price"], (int, float))), None)
+            if not basket_inr or not first_offer_price:
+                raise RuntimeError(f"Accor returned {currencies}; INR conversion unavailable")
+            eur_to_inr = basket_inr / first_offer_price
+            print(f"Live Accor EUR→INR factor: {eur_to_inr:.6f}", flush=True)
 
         best_by_room = {}
         for row in eligible_members:
-            row["member_price_inr"] = round(row["member_price_eur"] * eur_to_inr, 2)
-            row["standard_price_inr"] = round(row["standard_price_eur"] * eur_to_inr, 2) if isinstance(row["standard_price_eur"], (int, float)) else None
+            row["member_price_inr"] = round(row["member_price"] * eur_to_inr, 2)
+            row["standard_price_inr"] = round(row["standard_price"] * eur_to_inr, 2) if isinstance(row["standard_price"], (int, float)) else None
             key = row["product"]
             if key not in best_by_room or row["member_price_inr"] < best_by_room[key]["member_price_inr"]:
                 best_by_room[key] = row
