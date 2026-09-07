@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hotel Price History</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#172033;background:#f5f7fb}
+body{margin:0}.wrap{max-width:1100px;margin:auto;padding:24px 16px 48px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}h1{margin:0;font-size:28px}.sub{color:#667085;margin:6px 0 22px}.actions{display:flex;gap:8px}button{border:0;border-radius:10px;padding:10px 14px;background:#172033;color:#fff;font-weight:600}button:active{transform:scale(.98)}.card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:18px;margin:16px 0;box-shadow:0 2px 8px #0000000a}.title{font-size:20px;font-weight:700;margin-bottom:12px}.status{color:#667085;font-size:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.metric{background:#f8fafc;border-radius:12px;padding:14px}.metric b{display:block;font-size:24px;margin-top:4px}.table-wrap{overflow:auto;border:1px solid #e5e7eb;border-radius:12px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:10px 12px;border-bottom:1px solid #edf0f4;text-align:left;white-space:nowrap}th{background:#f8fafc;position:sticky;top:0}.lowest{font-weight:800}.error{color:#b42318;background:#fef3f2;padding:12px;border-radius:10px}.small{font-size:12px;color:#667085;margin-top:8px}@media(max-width:600px){h1{font-size:23px}.wrap{padding:18px 10px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><div><h1>🏨 Hotel Price History</h1><div class="sub">Taj City Centre Gurugram &amp; ibis Jaipur City Centre</div></div><div class="actions"><button onclick="loadAll()">↻ Refresh</button></div></div>
+  <div id="app"><div class="card">Loading latest history…</div></div>
+</div>
+<script>
+const files=[
+ {name:'Taj City Centre Gurugram',file:'Taj_Price_History.xlsx'},
+ {name:'ibis Jaipur City Centre',file:'Accor_Ibis_Jaipur_Price_History.xlsx'}
+];
+const rawBase='https://raw.githubusercontent.com/mk525262/taj-price-tracker/main/';
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function money(v){let n=Number(String(v).replace(/[^0-9.-]/g,''));return Number.isFinite(n)?'₹'+n.toLocaleString('en-IN'):esc(v);}
+function isPriceKey(k){return /(price|amount|rate|member|lowest|twin|king|standard)/i.test(k);}
+async function loadBook(book){
+ const res=await fetch(rawBase+encodeURIComponent(book.file)+'?t='+Date.now(),{cache:'no-store'});
+ if(!res.ok)throw new Error('Could not load '+book.file);
+ const buf=await res.arrayBuffer();
+ const wb=XLSX.read(buf,{type:'array',cellDates:true});
+ let all=[];
+ wb.SheetNames.forEach(sn=>{const ws=wb.Sheets[sn];const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});rows.forEach(r=>all.push({...r,__sheet:sn}));});
+ return all;
+}
+function findDate(row){for(const k of Object.keys(row)){if(/date|time|timestamp|checked|scrape/i.test(k)&&row[k])return String(row[k]);}return ''}
+function findPrices(row){const out=[];for(const [k,v] of Object.entries(row)){if(k==='__sheet'||v==='')continue;if(isPriceKey(k)){const n=Number(String(v).replace(/[^0-9.-]/g,''));if(Number.isFinite(n)&&n>0)out.push(n);}}return out;}
+function latest(rows){return rows.length?rows[rows.length-1]:null}
+function render(book,rows){
+ if(!rows.length)return `<div class="card"><div class="title">${esc(book.name)}</div><div class="status">No history rows found yet.</div></div>`;
+ const last=latest(rows), prices=findPrices(last); const low=prices.length?Math.min(...prices):null;
+ const keys=Object.keys(last).filter(k=>k!=='__sheet');
+ const head=keys.map(k=>`<th>${esc(k)}</th>`).join('');
+ const body=rows.slice(-30).reverse().map(r=>`<tr>${keys.map(k=>{let v=r[k];let cls=isPriceKey(k)?' class="lowest"':'';return `<td${cls}>${esc(v)}</td>`}).join('')}</tr>`).join('');
+ return `<div class="card"><div class="title">${esc(book.name)}</div><div class="grid"><div class="metric">History rows<b>${rows.length}</b></div><div class="metric">Latest check<b>${esc(findDate(last)||'—')}</b></div><div class="metric">Latest lowest<b>${low!==null?money(low):'—'}</b></div></div><div class="small">Showing the latest 30 recorded rows. Refresh the page to fetch the newest Excel files.</div><div class="table-wrap" style="margin-top:14px"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+}
+async function loadAll(){
+ const app=document.getElementById('app');app.innerHTML='<div class="card">Loading latest history…</div>';
+ const out=[];
+ for(const book of files){try{out.push(render(book,await loadBook(book)));}catch(e){out.push(`<div class="card"><div class="title">${esc(book.name)}</div><div class="error">${esc(e.message)}</div></div>`);}}
+ app.innerHTML=out.join('');
+}
+loadAll();
+</script>
+</body>
+</html>
