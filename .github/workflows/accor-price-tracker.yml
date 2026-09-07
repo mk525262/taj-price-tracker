@@ -45,4 +45,4 @@ jobs:
           git diff --cached --quiet || git commit -m "Update Ibis Jaipur price history"
           git push
 
-      # Test trigger after changing the Ibis dates/guest count.
+      # Manual test trigger.
