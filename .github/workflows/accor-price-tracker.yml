@@ -125,10 +125,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp Accor_Ibis_Jaipur_Price_History.xlsx /tmp/Accor_Ibis_Jaipur_Price_History.xlsx
+          git fetch origin main
+          git reset --hard origin/main
+          cp /tmp/Accor_Ibis_Jaipur_Price_History.xlsx Accor_Ibis_Jaipur_Price_History.xlsx
           git add Accor_Ibis_Jaipur_Price_History.xlsx
           git diff --cached --quiet && exit 0
           git commit -m "Update Ibis Jaipur price history"
-          git pull --rebase origin main
-          git push
+          git push origin HEAD:main
 
 # separate-accor-bot
