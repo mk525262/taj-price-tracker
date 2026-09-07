@@ -38,6 +38,47 @@ jobs:
       - name: Run Taj check for price history
         run: xvfb-run -a python taj_tracker.py
 
+      - name: Sync latest Taj price to Google Sheet
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          from openpyxl import load_workbook
+
+          webhook = "https://script.google.com/macros/s/AKfycbwq6S0UJXOjaz8UoI5AQbukGXi_4kWrllPEqTOZMReJCRwmhzc91N7esrdWb8LZ8g8y/exec"
+          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
+          ws = wb.active
+          row = list(ws.iter_rows(values_only=True))[-1]
+
+          payload = {
+              "timestamp": row[0],
+              "twinMember": row[1],
+              "twinStandard": row[2],
+              "kingMember": row[3],
+              "kingStandard": row[4],
+              "lowestPrice": row[5],
+              "lowestRoom": row[6],
+              "lowestRateType": row[7],
+          }
+
+          data = json.dumps(payload).encode("utf-8")
+          request = urllib.request.Request(
+              webhook,
+              data=data,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              result = json.loads(response.read().decode("utf-8"))
+
+          print("Google Sheet response:", result)
+          if not result.get("success"):
+              raise SystemExit("Google Sheet sync failed: " + str(result))
+
+          print("Latest Taj price synced to Google Sheet.")
+          PY
+
       - name: Alert 5 times only when price changes
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
