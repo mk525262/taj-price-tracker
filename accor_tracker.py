@@ -18,9 +18,9 @@ TELEGRAM_CHAT_ID = "348797661"
 
 
 def send_telegram(message):
-    token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN")
+    token = os.environ.get("ACCOR_TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError("TAJ_TELEGRAM_BOT_TOKEN secret is missing")
+        raise RuntimeError("ACCOR_TELEGRAM_BOT_TOKEN secret is missing")
     r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
     r.raise_for_status()
 
