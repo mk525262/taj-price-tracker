@@ -2,8 +2,6 @@ name: Taj Price Tracker
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/3 * * * *"
 
 permissions:
   contents: write
@@ -26,9 +24,7 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
-      - name: Run Taj price tracker
-        env:
-          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
+      - name: Run Taj price tracker manually
         run: python taj_tracker.py
 
       - name: Save Excel history
@@ -43,6 +39,7 @@ jobs:
           git add Taj_Price_History.xlsx
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
+          git pull --rebase origin main
           git push
 
       - name: Upload diagnostics on failure
