@@ -9,9 +9,9 @@ import json
 HOTEL_ID = "6529"
 HOTEL_NAME = "ibis Jaipur City Centre"
 CHECKIN = "2026-09-20"
-CHECKOUT = "2026-09-21"
-ADULTS = 2
-ROOMS = 1
+CHECKOUT = "2026-09-22"
+ADULTS = 4
+ROOMS = 2
 HOTEL_URL = f"https://all.accor.com/hotel/{HOTEL_ID}/index.en.shtml"
 HISTORY_FILE = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
 TELEGRAM_CHAT_ID = "348797661"
@@ -112,7 +112,7 @@ def main():
 
         context.on("response", on_response)
         page = context.new_page()
-        target_url = HOTEL_URL + f"?dateIn={CHECKIN}&dateOut={CHECKOUT}&compositions=2&stayplus=false"
+        target_url = HOTEL_URL + f"?dateIn={CHECKIN}&dateOut={CHECKOUT}&compositions=2,2&stayplus=false"
         print("Method : ACCOR BROWSER GRAPHQL API", flush=True)
         print("Opening Accor booking page...", flush=True)
         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
@@ -200,7 +200,7 @@ def main():
         print("RATE TYPE : MEMBER", flush=True)
 
         save_history(final_rows)
-        msg = f"🏨 ACCOR PRICE UPDATE\n\n{HOTEL_NAME}\n📅 {CHECKIN} → {CHECKOUT}\n👤 {ADULTS} Adults | {ROOMS} Room\n\n"
+        msg = f"🏨 ACCOR PRICE UPDATE\n\n{HOTEL_NAME}\n📅 {CHECKIN} → {CHECKOUT}\n👤 {ADULTS} Adults | {ROOMS} Rooms\n\n"
         for row in final_rows:
             standard = f"₹{row['standard_price_inr']:,.0f}" if row["standard_price_inr"] is not None else "N/A"
             msg += f"{row['room']}\nMember: ₹{row['member_price_inr']:,.0f}\nStandard: {standard}\n\n"
