@@ -55,16 +55,22 @@ def save_history(member_price, standard_price):
 
 def parse_displayed_price(text):
     clean = re.sub(r"\s+", " ", text.replace("\u00a0", " ")).strip()
-    pattern = re.compile(
-        r"From\s+₹\s*([\d,]+(?:\.\d+)?)\s+₹\s*([\d,]+(?:\.\d+)?)\s+per\s+room\s+per\s+stay",
-        re.IGNORECASE,
-    )
-    m = pattern.search(clean)
-    if not m:
-        return None
-    standard = float(m.group(1).replace(",", ""))
-    member = float(m.group(2).replace(",", ""))
-    return member, standard
+    # Accor has rendered this in several equivalent forms, including:
+    # From ₹5,415 ₹5,145 per room per stay
+    # From ₹ 5,415 ₹ 5,145 per room per stay
+    # ₹5,415 ₹5,145 per room per stay
+    amount = r"₹\s*([\d,]+(?:\.\d+)?)"
+    patterns = [
+        rf"From\s*{amount}\s+{amount}\s+per\s+room\s+per\s+stay",
+        rf"{amount}\s+{amount}\s+per\s+room\s+per\s+stay",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, clean, re.IGNORECASE)
+        if m:
+            standard = float(m.group(1).replace(",", ""))
+            member = float(m.group(2).replace(",", ""))
+            return member, standard
+    return None
 
 
 def main():
@@ -99,32 +105,58 @@ def main():
         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(15000)
 
-        # The tracker must use the same final price shown by the official Accor UI:
-        # "From ₹5,415 ₹5,145 per room per stay" for the current search.
-        body_text = page.locator("body").inner_text(timeout=10000)
-        prices = parse_displayed_price(body_text)
+        def read_price():
+            # Check the full rendered body first.
+            texts = [page.locator("body").inner_text(timeout=10000)]
+            # Then inspect rendered elements containing the exact pricing phrase;
+            # this catches cases where the booking result is rendered in a nested
+            # component whose text is not present in the initial body snapshot.
+            try:
+                loc = page.get_by_text(re.compile(r"per\s+room\s+per\s+stay", re.I))
+                count = min(loc.count(), 30)
+                for i in range(count):
+                    try:
+                        t = loc.nth(i).inner_text(timeout=1000)
+                        if t:
+                            texts.append(t)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            for t in texts:
+                prices = parse_displayed_price(t)
+                if prices:
+                    return prices
+            return None
+
+        prices = read_price()
 
         if not prices:
-            # One extra wait/click attempt in case the booking summary renders late.
             try:
                 loc = page.get_by_text("See availabilities", exact=False).first
                 if loc.is_visible(timeout=1500):
                     print("Triggering: See availabilities", flush=True)
                     loc.evaluate("el => el.click()")
                     page.wait_for_timeout(15000)
-                    body_text = page.locator("body").inner_text(timeout=10000)
-                    prices = parse_displayed_price(body_text)
+                    prices = read_price()
             except Exception:
                 pass
 
         if not prices:
+            # Print only useful diagnostics, not the entire page.
+            try:
+                body = page.locator("body").inner_text(timeout=5000)
+                lines = [x.strip() for x in body.splitlines() if x.strip()]
+                candidates = [x for x in lines if "room" in x.lower() or "₹" in x]
+                print("PRICE DEBUG:", " | ".join(candidates[:80]), flush=True)
+            except Exception:
+                pass
             browser.close()
             raise RuntimeError(
                 "Official Accor displayed 'per room per stay' price was not found; refusing to send a possibly wrong price."
             )
 
         member_price, standard_price = prices
-
         print(f"OFFICIAL ACCOR MEMBER : ₹{member_price:,.0f} / room / stay", flush=True)
         print(f"OFFICIAL ACCOR STANDARD : ₹{standard_price:,.0f} / room / stay", flush=True)
         print(f"LOWEST PRICE : ₹{member_price:,.0f} / room / stay", flush=True)
