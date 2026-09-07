@@ -106,9 +106,6 @@ def main():
         clean = re.sub(r"\s+", " ", body.replace("\u00a0", " ")).strip()
         print("SEARCH STATE DEBUG:", clean[:4500], flush=True)
 
-        # Accor rewrites the visible URL/search header to its default state, but the
-        # HotelPageHot request above is the actual availability query. We only alert
-        # after that request has been forcibly set to our exact dates/2-room search.
         if not target_request_seen:
             browser.close()
             raise RuntimeError("Accor HotelPageHot target request was not captured; refusing to send a possibly wrong price.")
@@ -125,11 +122,14 @@ def main():
         print(f"OFFICIAL ACCOR STANDARD : ₹{standard_price:,.0f} / stay", flush=True)
         save_history(member_price, standard_price)
         send_telegram(
-            "🏨 ACCOR PRICE UPDATE\n\n"
-            f"{HOTEL_NAME}\n📅 {CHECKIN} → {CHECKOUT}\n👤 {ADULTS} Adults | {ROOMS} Rooms\n"
-            "🛏️ Composition: 2 + 2 adults\n🏷️ Member rate\n\n"
-            "Lowest Member Rate\n"
-            f"₹{member_price:,.0f} per stay\nStandard: ₹{standard_price:,.0f} per stay\n\n"
+            f"₹{member_price:,.0f} / STAY\n"
+            "LOWEST PRICE\n\n"
+            f"🏨 {HOTEL_NAME}\n"
+            f"📅 {CHECKIN} → {CHECKOUT}\n"
+            f"👤 {ADULTS} Adults | {ROOMS} Rooms\n"
+            "🛏️ Composition: 2 + 2 adults\n"
+            "🏷️ Member rate\n\n"
+            f"Standard: ₹{standard_price:,.0f} / stay\n\n"
             "Source: Official Accor rates page"
         )
         print("Telegram message sent.", flush=True)
