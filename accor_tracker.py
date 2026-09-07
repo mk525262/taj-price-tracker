@@ -55,7 +55,14 @@ def save_history(member_price, standard_price):
 def parse_displayed_price(text):
     clean = re.sub(r"\s+", " ", text.replace("\u00a0", " ")).strip()
     amount = r"₹\s*([\d,]+(?:\.\d+)?)"
+
+    # Current official Accor rates page format:
+    # Member rate From ₹5,145.00 Public rate from ₹5,415.00 2 nights 2 adults 1 room
+    # The displayed amount is the complete stay price for that room.
     patterns = [
+        rf"Member\s+rate\s+From\s*{amount}\s+Public\s+rate\s+from\s*{amount}",
+        rf"Member\s+rate\s+From\s*{amount}\s+Public\s+rate\s*{amount}",
+        rf"From\s*{amount}\s+Public\s+rate\s+from\s*{amount}",
         rf"From\s*{amount}\s+{amount}\s+per\s+stay",
         rf"From\s*{amount}\s+{amount}\s+per\s+room\s+per\s+stay",
         rf"{amount}\s+{amount}\s+per\s+stay",
@@ -64,7 +71,7 @@ def parse_displayed_price(text):
     for pattern in patterns:
         m = re.search(pattern, clean, re.IGNORECASE)
         if m:
-            return float(m.group(2).replace(",", "")), float(m.group(1).replace(",", ""))
+            return float(m.group(1).replace(",", "")), float(m.group(2).replace(",", ""))
     return None
 
 
@@ -105,23 +112,17 @@ def main():
         clean = re.sub(r"\s+", " ", body.replace("\u00a0", " ")).strip()
         print("SEARCH STATE DEBUG:", clean[:3000], flush=True)
 
+        # Safety check: only accept a result when the official page itself confirms
+        # the requested search state (4 people, 2 rooms) before reading prices.
+        state_ok = bool(re.search(r"4\s+people\s*,\s*2\s+rooms", clean, re.IGNORECASE))
+        if not state_ok:
+            browser.close()
+            raise RuntimeError("Official Accor page did not confirm 4 people, 2 rooms; refusing to send a possibly wrong price.")
+
         prices = parse_displayed_price(body)
         if not prices:
-            try:
-                loc = page.get_by_text(re.compile(r"per\s+(room\s+)?per\s+stay|per\s+stay", re.I))
-                for i in range(min(loc.count(), 50)):
-                    try:
-                        prices = parse_displayed_price(loc.nth(i).inner_text(timeout=1000))
-                        if prices:
-                            break
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        if not prices:
             browser.close()
-            raise RuntimeError("Official Accor displayed per-stay member/public price was not found; refusing to send a possibly wrong price.")
+            raise RuntimeError("Official Accor displayed member/public stay price was not found; refusing to send a possibly wrong price.")
 
         member_price, standard_price = prices
         print(f"OFFICIAL ACCOR MEMBER : ₹{member_price:,.0f} / stay", flush=True)
