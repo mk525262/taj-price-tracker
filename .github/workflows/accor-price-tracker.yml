@@ -33,6 +33,41 @@ jobs:
         env:
           ACCOR_TELEGRAM_BOT_TOKEN: ${{ secrets.ACCOR_TELEGRAM_BOT_TOKEN }}
         run: python accor_tracker.py
+      - name: Sync latest price to Google Sheet
+        env:
+          ACCOR_SHEET_WEBHOOK: https://script.google.com/macros/s/AKfycbzB1sWbowoGzodfC4o0juShbv4s-tydzkFHsWFwJsPxZYSIpBf072oWXtmk9l8bc5o/exec
+        run: |
+          python - <<'PY'
+          from openpyxl import load_workbook
+          from pathlib import Path
+          import json, os, requests
+
+          path = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
+          wb = load_workbook(path, data_only=True)
+          ws = wb.active
+          row = [ws.cell(ws.max_row, c).value for c in range(1, 12)]
+
+          payload = {
+              "timestamp": str(row[0]),
+              "checkIn": str(row[1]),
+              "checkOut": str(row[2]),
+              "adults": row[3],
+              "rooms": row[4],
+              "composition": str(row[5]),
+              "hotel": str(row[6]),
+              "memberPrice": row[7],
+              "standardPrice": row[8],
+              "priceBasis": str(row[9]),
+              "eligible": str(row[10]),
+          }
+
+          r = requests.post(os.environ["ACCOR_SHEET_WEBHOOK"], json=payload, timeout=30)
+          r.raise_for_status()
+          result = r.json()
+          if not result.get("success"):
+              raise RuntimeError(f"Google Sheet sync failed: {result}")
+          print("Google Sheet sync successful:", json.dumps(result))
+          PY
       - name: Commit Excel price history
         run: |
           git config user.name "github-actions[bot]"
