@@ -6,7 +6,7 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 */6 * * *"
 
 permissions:
   contents: write
@@ -35,8 +35,77 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
 
-      - name: Run Taj check for Excel only
+      - name: Run Taj check for price history
         run: xvfb-run -a python taj_tracker.py
+
+      - name: Alert 5 times only when price changes
+        env:
+          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+          from openpyxl import load_workbook
+
+          path = "Taj_Price_History.xlsx"
+          wb = load_workbook(path, read_only=True, data_only=True)
+          ws = wb.active
+          rows = list(ws.iter_rows(values_only=True))
+
+          if len(rows) < 3:
+              print("Not enough history rows for a price-change comparison.")
+              raise SystemExit(0)
+
+          previous = rows[-2]
+          current = rows[-1]
+
+          # Compare all four tracked rates: Twin/King × Member/Standard.
+          changed = tuple(previous[1:5]) != tuple(current[1:5])
+
+          print("Previous:", previous[:5])
+          print("Current :", current[:5])
+          print("PRICE_CHANGED:", changed)
+
+          if not changed:
+              print("No price change. Telegram alert skipped.")
+              raise SystemExit(0)
+
+          token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
+          if not token:
+              raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
+
+          labels = [
+              ("🛏 Twin Member", current[1]),
+              ("🛏 Twin Standard", current[2]),
+              ("🛏 King Member", current[3]),
+              ("🛏 King Standard", current[4]),
+          ]
+
+          message = "🚨 TAJ PRICE CHANGE\n\n"
+          message += "🏨 Taj City Centre Gurugram\n"
+          message += "📅 25 Dec 2026 → 26 Dec 2026\n"
+          message += "👤 1 Guest | 1 Room\n\n"
+          for label, value in labels:
+              message += f"{label}: ₹{int(value):,}\n"
+          message += f"\n💰 Lowest Price: ₹{int(current[5]):,}\n"
+          message += f"🕐 {current[0]}\n"
+
+          url = "https://api.telegram.org/bot" + token + "/sendMessage"
+
+          for i in range(5):
+              data = urllib.parse.urlencode({
+                  "chat_id": "348797661",
+                  "text": message
+              }).encode("utf-8")
+              req = urllib.request.Request(url, data=data, method="POST")
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  response.read()
+              print(f"Telegram alert {i + 1}/5 sent.")
+              if i < 4:
+                  time.sleep(1)
+          PY
 
       - name: Export Taj Excel history to CSV
         run: |
