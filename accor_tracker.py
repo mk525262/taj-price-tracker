@@ -1,6 +1,7 @@
 from playwright.sync_api import sync_playwright
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import re, json
 
@@ -25,7 +26,8 @@ def save_history(member_price, standard_price):
         ws = wb.active
         ws.title = "Price History"
         ws.append(["Check Time", "Check-in", "Check-out", "Adults", "Rooms", "Composition", "Hotel", "Member Price (INR)", "Standard Price (INR)", "Price Basis", "Eligible"])
-    ws.append([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), CHECKIN, CHECKOUT, ADULTS, ROOMS, COMPOSITIONS, HOTEL_NAME, member_price, standard_price, "Official Accor displayed stay price", "YES"])
+    ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    ws.append([ist_now.strftime("%Y-%m-%d %H:%M:%S"), CHECKIN, CHECKOUT, ADULTS, ROOMS, COMPOSITIONS, HOTEL_NAME, member_price, standard_price, "Official Accor displayed stay price", "YES"])
     wb.save(HISTORY_FILE)
     print(f"Excel history saved: {HISTORY_FILE}", flush=True)
 
