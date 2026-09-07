@@ -8,9 +8,9 @@ import json
 
 HOTEL_ID = "6529"
 HOTEL_NAME = "ibis Jaipur City Centre"
-CHECKIN = "2026-12-25"
-CHECKOUT = "2026-12-26"
-ADULTS = 1
+CHECKIN = "2026-09-20"
+CHECKOUT = "2026-09-21"
+ADULTS = 2
 ROOMS = 1
 HOTEL_URL = f"https://all.accor.com/hotel/{HOTEL_ID}/index.en.shtml"
 HISTORY_FILE = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
@@ -66,7 +66,6 @@ def main():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(locale="en-IN")
 
-        # Force India/INR in the exact GraphQL payload sent by the Accor booking page.
         def route_graphql(route):
             req = route.request
             if "api.accor.com/bff/v1/graphql" not in req.url:
@@ -113,7 +112,7 @@ def main():
 
         context.on("response", on_response)
         page = context.new_page()
-        target_url = HOTEL_URL + f"?dateIn={CHECKIN}&dateOut={CHECKOUT}&compositions=1&stayplus=false"
+        target_url = HOTEL_URL + f"?dateIn={CHECKIN}&dateOut={CHECKOUT}&compositions=2&stayplus=false"
         print("Method : ACCOR BROWSER GRAPHQL API", flush=True)
         print("Opening Accor booking page...", flush=True)
         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
@@ -172,7 +171,6 @@ def main():
         if not eligible_members:
             raise RuntimeError("No eligible Accor member room offer found")
 
-        # If Accor accepted the market override, prices are already INR. Otherwise use the live basket conversion.
         currencies = sorted({x.get("currency") for x in parsed if x.get("currency")})
         if currencies == ["INR"]:
             eur_to_inr = 1.0
@@ -202,7 +200,7 @@ def main():
         print("RATE TYPE : MEMBER", flush=True)
 
         save_history(final_rows)
-        msg = f"🏨 ACCOR PRICE UPDATE\n\n{HOTEL_NAME}\n📅 {CHECKIN} → {CHECKOUT}\n👤 {ADULTS} Adult | {ROOMS} Room\n\n"
+        msg = f"🏨 ACCOR PRICE UPDATE\n\n{HOTEL_NAME}\n📅 {CHECKIN} → {CHECKOUT}\n👤 {ADULTS} Adults | {ROOMS} Room\n\n"
         for row in final_rows:
             standard = f"₹{row['standard_price_inr']:,.0f}" if row["standard_price_inr"] is not None else "N/A"
             msg += f"{row['room']}\nMember: ₹{row['member_price_inr']:,.0f}\nStandard: {standard}\n\n"
