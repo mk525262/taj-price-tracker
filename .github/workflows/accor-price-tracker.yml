@@ -30,8 +30,6 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
       - name: Check Ibis Jaipur price
-        env:
-          ACCOR_TELEGRAM_BOT_TOKEN: ${{ secrets.ACCOR_TELEGRAM_BOT_TOKEN }}
         run: python accor_tracker.py
       - name: Sync latest price to Google Sheet
         env:
@@ -67,6 +65,61 @@ jobs:
           if not result.get("success"):
               raise RuntimeError(f"Google Sheet sync failed: {result}")
           print("Google Sheet sync successful:", json.dumps(result))
+          PY
+      - name: Send alert only when price changes
+        env:
+          ACCOR_TELEGRAM_BOT_TOKEN: ${{ secrets.ACCOR_TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          from openpyxl import load_workbook
+          from pathlib import Path
+          import os, requests, time
+
+          path = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
+          wb = load_workbook(path, data_only=True)
+          ws = wb.active
+
+          if ws.max_row < 3:
+              print("Not enough history for price-change alert.")
+              raise SystemExit(0)
+
+          previous = [ws.cell(ws.max_row - 1, c).value for c in range(1, 12)]
+          current = [ws.cell(ws.max_row, c).value for c in range(1, 12)]
+          previous_price = float(previous[7])
+          current_price = float(current[7])
+
+          if previous_price == current_price:
+              print(f"No member-price change: ₹{current_price:,.0f}. No alert sent.")
+              raise SystemExit(0)
+
+          if current_price <= 4900:
+              alert_count = 20
+              title = "🚨🚨🚨 ACCOR ₹4,900 ALERT 🚨🚨🚨"
+          else:
+              alert_count = 5
+              title = "🚨 ACCOR PRICE CHANGE 🚨"
+
+          message = (
+              f"{title}\n\n"
+              f"₹{current_price:,.0f} / STAY\n"
+              f"Previous: ₹{previous_price:,.0f} / stay\n\n"
+              "🏨 ibis Jaipur City Centre\n"
+              "📅 2026-09-20 → 2026-09-22\n"
+              "👤 4 Adults | 2 Rooms\n"
+              "🛏️ Composition: 2 + 2 adults\n"
+              "🏷️ Member rate\n\n"
+              f"Standard: ₹{float(current[8]):,.0f} / stay\n\n"
+              "Source: Official Accor rates page"
+          )
+
+          token = os.environ["ACCOR_TELEGRAM_BOT_TOKEN"]
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          for i in range(alert_count):
+              r = requests.post(url, data={"chat_id": "348797661", "text": message}, timeout=30)
+              r.raise_for_status()
+              print(f"Price-change alert {i + 1}/{alert_count} sent.")
+              if i < alert_count - 1:
+                  time.sleep(1)
           PY
       - name: Commit Excel price history
         run: |
