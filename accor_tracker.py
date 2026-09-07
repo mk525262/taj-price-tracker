@@ -2,7 +2,7 @@ from playwright.sync_api import sync_playwright
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
 from pathlib import Path
-import os, re, requests, json
+import re, json
 
 HOTEL_ID = "6529"
 HOTEL_NAME = "ibis Jaipur City Centre"
@@ -14,17 +14,6 @@ ROOMS = 2
 COMPOSITIONS = "2,2"
 HOTEL_URL = f"https://all.accor.com/ssr/app/accor/rates/{HOTEL_ID}/index.en.shtml"
 HISTORY_FILE = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
-TELEGRAM_CHAT_ID = "348797661"
-
-# Telegram bot was started by the user; trigger a fresh validation run.
-
-
-def send_telegram(message):
-    token = os.environ.get("ACCOR_TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("ACCOR_TELEGRAM_BOT_TOKEN secret is missing")
-    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
-    r.raise_for_status()
 
 
 def save_history(member_price, standard_price):
@@ -110,31 +99,20 @@ def main():
 
         if not target_request_seen:
             browser.close()
-            raise RuntimeError("Accor HotelPageHot target request was not captured; refusing to send a possibly wrong price.")
+            raise RuntimeError("Accor HotelPageHot target request was not captured; refusing to save a possibly wrong price.")
         if "2 nights 2 adults" not in clean:
             browser.close()
-            raise RuntimeError("Accor forced 2-night room result was not confirmed; refusing to send a possibly wrong price.")
+            raise RuntimeError("Accor forced 2-night room result was not confirmed; refusing to save a possibly wrong price.")
 
         prices = parse_displayed_price(body)
         if not prices:
             browser.close()
-            raise RuntimeError("Official Accor displayed member/public price was not found; refusing to send a possibly wrong price.")
+            raise RuntimeError("Official Accor displayed member/public price was not found; refusing to save a possibly wrong price.")
         member_price, standard_price = prices
         print(f"OFFICIAL ACCOR MEMBER : ₹{member_price:,.0f} / stay", flush=True)
         print(f"OFFICIAL ACCOR STANDARD : ₹{standard_price:,.0f} / stay", flush=True)
         save_history(member_price, standard_price)
-        send_telegram(
-            f"₹{member_price:,.0f} / STAY\n"
-            "LOWEST PRICE\n\n"
-            f"🏨 {HOTEL_NAME}\n"
-            f"📅 {CHECKIN} → {CHECKOUT}\n"
-            f"👤 {ADULTS} Adults | {ROOMS} Rooms\n"
-            "🛏️ Composition: 2 + 2 adults\n"
-            "🏷️ Member rate\n\n"
-            f"Standard: ₹{standard_price:,.0f} / stay\n\n"
-            "Source: Official Accor rates page"
-        )
-        print("Telegram message sent.", flush=True)
+        print("Price check completed. Telegram alerts are handled by GitHub Actions.", flush=True)
         browser.close()
 
 
