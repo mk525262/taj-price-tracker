@@ -16,6 +16,8 @@ HOTEL_URL = f"https://all.accor.com/ssr/app/accor/rates/{HOTEL_ID}/index.en.shtm
 HISTORY_FILE = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
 TELEGRAM_CHAT_ID = "348797661"
 
+# Telegram bot was started by the user; trigger a fresh validation run.
+
 
 def send_telegram(message):
     token = os.environ.get("ACCOR_TELEGRAM_BOT_TOKEN")
