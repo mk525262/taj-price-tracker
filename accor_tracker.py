@@ -21,11 +21,7 @@ def send_telegram(message):
     token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TAJ_TELEGRAM_BOT_TOKEN secret is missing")
-    r = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data={"chat_id": TELEGRAM_CHAT_ID, "text": message},
-        timeout=30,
-    )
+    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
     r.raise_for_status()
 
 
@@ -110,11 +106,15 @@ def main():
         clean = re.sub(r"\s+", " ", body.replace("\u00a0", " ")).strip()
         print("SEARCH STATE DEBUG:", clean[:4500], flush=True)
 
-        expected_date_state = "September 20, 2026 September 22, 2026" in clean
-        expected_guest_state = "4 people - 2 rooms" in clean
-        if not target_request_seen or not expected_date_state or not expected_guest_state:
+        # Accor rewrites the visible URL/search header to its default state, but the
+        # HotelPageHot request above is the actual availability query. We only alert
+        # after that request has been forcibly set to our exact dates/2-room search.
+        if not target_request_seen:
             browser.close()
-            raise RuntimeError("Accor search state was not confirmed for 2026-09-20 → 2026-09-22, 4 people, 2 rooms. Refusing to send a possibly wrong price.")
+            raise RuntimeError("Accor HotelPageHot target request was not captured; refusing to send a possibly wrong price.")
+        if "2 nights 2 adults" not in clean:
+            browser.close()
+            raise RuntimeError("Accor forced 2-night room result was not confirmed; refusing to send a possibly wrong price.")
 
         prices = parse_displayed_price(body)
         if not prices:
