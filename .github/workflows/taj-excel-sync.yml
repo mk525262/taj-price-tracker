@@ -6,7 +6,7 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: write
