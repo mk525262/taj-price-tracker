@@ -38,7 +38,20 @@ jobs:
       - name: Run Taj check for Excel only
         run: xvfb-run -a python taj_tracker.py
 
-      - name: Commit Taj Excel history
+      - name: Export Taj Excel history to CSV
+        run: |
+          python - <<'PY'
+          import csv
+          from openpyxl import load_workbook
+          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
+          ws = wb.active
+          with open("Taj_Price_History.csv", "w", newline="", encoding="utf-8") as f:
+              writer = csv.writer(f)
+              for row in ws.iter_rows(values_only=True):
+                  writer.writerow(row)
+          PY
+
+      - name: Commit Taj price history
         if: always()
         run: |
           if [ ! -f Taj_Price_History.xlsx ]; then
@@ -47,7 +60,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Taj_Price_History.xlsx
+          git add Taj_Price_History.xlsx Taj_Price_History.csv
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
           git pull --rebase origin main
