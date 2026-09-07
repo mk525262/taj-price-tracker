@@ -44,3 +44,5 @@ jobs:
           git add Accor_Ibis_Jaipur_Price_History.xlsx
           git diff --cached --quiet || git commit -m "Update Ibis Jaipur price history"
           git push
+
+      # Test trigger after changing the Ibis dates/guest count.
