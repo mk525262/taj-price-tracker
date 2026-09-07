@@ -31,7 +31,7 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Check Ibis Jaipur price
         env:
-          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
+          ACCOR_TELEGRAM_BOT_TOKEN: ${{ secrets.ACCOR_TELEGRAM_BOT_TOKEN }}
         run: python accor_tracker.py
       - name: Commit Excel price history
         run: |
@@ -43,4 +43,4 @@ jobs:
           git pull --rebase origin main
           git push
 
-# parser-fix-test-3
+# separate-accor-bot
