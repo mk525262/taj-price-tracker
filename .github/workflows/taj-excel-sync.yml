@@ -2,6 +2,9 @@ name: Taj Excel History Sync
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/taj-excel-sync.yml"
   schedule:
     - cron: "*/30 * * * *"
 
