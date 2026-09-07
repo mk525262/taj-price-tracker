@@ -42,7 +42,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Accor_Ibis_Jaipur_Price_History.xlsx
-          git diff --cached --quiet || git commit -m "Update Ibis Jaipur price history"
+          git diff --cached --quiet && exit 0
+          git commit -m "Update Ibis Jaipur price history"
+          git pull --rebase origin main
           git push
-
-      # Manual test trigger.
