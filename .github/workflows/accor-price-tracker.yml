@@ -42,3 +42,5 @@ jobs:
           git commit -m "Update Ibis Jaipur price history"
           git pull --rebase origin main
           git push
+
+# parser-fix-test
