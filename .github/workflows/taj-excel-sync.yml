@@ -82,7 +82,7 @@ jobs:
           print("Latest Taj price synced to Google Sheet.")
           PY
 
-      - name: Alert 5 times only when price changes
+      - name: Alert only when price changes
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
@@ -104,8 +104,6 @@ jobs:
 
           previous = rows[-2]
           current = rows[-1]
-
-          # Compare all four tracked rates: Twin/King × Member/Standard.
           changed = tuple(previous[1:5]) != tuple(current[1:5])
 
           print("Previous:", previous[:5])
@@ -120,34 +118,41 @@ jobs:
           if not token:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
-          labels = [
-              ("🛏 Twin Member", current[1]),
-              ("🛏 Twin Standard", current[2]),
-              ("🛏 King Member", current[3]),
-              ("🛏 King Standard", current[4]),
-          ]
-
-          message = "🚨 TAJ PRICE CHANGE\n\n"
-          message += "🏨 Taj City Centre Gurugram\n"
-          message += "📅 25 Dec 2026 → 26 Dec 2026\n"
-          message += "👤 1 Guest | 1 Room\n\n"
-          for label, value in labels:
-              message += f"{label}: ₹{int(value):,}\n"
-          message += f"\n💰 Lowest Price: ₹{int(current[5]):,}\n"
-          message += f"🕐 {current[0]}\n"
+          lowest_price = float(current[5])
+          if lowest_price <= 9000:
+              alert_count = 50
+              message = "🚨🚨 TAJ SPECIAL PRICE ALERT 🚨🚨\n\n"
+              message += "🏨 Taj City Centre Gurugram\n"
+              message += "📅 25 Dec 2026 → 26 Dec 2026\n"
+              message += "👤 1 Guest | 1 Room\n\n"
+              message += f"💰 LOWEST PRICE: ₹{int(lowest_price):,}\n"
+              message += "🔥 PRICE ₹9,000 OR BELOW!\n"
+              message += f"🕐 {current[0]}\n"
+          else:
+              alert_count = 5
+              labels = [
+                  ("🛏 Twin Member", current[1]),
+                  ("🛏 Twin Standard", current[2]),
+                  ("🛏 King Member", current[3]),
+                  ("🛏 King Standard", current[4]),
+              ]
+              message = "🚨 TAJ PRICE CHANGE\n\n"
+              message += "🏨 Taj City Centre Gurugram\n"
+              message += "📅 25 Dec 2026 → 26 Dec 2026\n"
+              message += "👤 1 Guest | 1 Room\n\n"
+              for label, value in labels:
+                  message += f"{label}: ₹{int(value):,}\n"
+              message += f"\n💰 Lowest Price: ₹{int(current[5]):,}\n"
+              message += f"🕐 {current[0]}\n"
 
           url = "https://api.telegram.org/bot" + token + "/sendMessage"
-
-          for i in range(5):
-              data = urllib.parse.urlencode({
-                  "chat_id": "348797661",
-                  "text": message
-              }).encode("utf-8")
+          for i in range(alert_count):
+              data = urllib.parse.urlencode({"chat_id": "348797661", "text": message}).encode("utf-8")
               req = urllib.request.Request(url, data=data, method="POST")
               with urllib.request.urlopen(req, timeout=20) as response:
                   response.read()
-              print(f"Telegram alert {i + 1}/5 sent.")
-              if i < 4:
+              print(f"Telegram alert {i + 1}/{alert_count} sent.")
+              if i < alert_count - 1:
                   time.sleep(1)
           PY
 
@@ -175,6 +180,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
           git diff --cached --quiet && exit 0
-          git commit -m "Use India time for Taj history"
+          git commit -m "Add Taj special price alert"
           git pull --rebase origin main
           git push
