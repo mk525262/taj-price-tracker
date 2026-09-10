@@ -137,12 +137,12 @@ jobs:
                   ("🛏 King Standard", current[4]),
               ]
               message = "🚨 TAJ PRICE CHANGE\n\n"
+              message += f"💰 LOWEST PRICE: ₹{int(current[5]):,}\n\n"
               message += "🏨 Taj City Centre Gurugram\n"
               message += "📅 25 Dec 2026 → 26 Dec 2026\n"
               message += "👤 1 Guest | 1 Room\n\n"
               for label, value in labels:
                   message += f"{label}: ₹{int(value):,}\n"
-              message += f"\n💰 Lowest Price: ₹{int(current[5]):,}\n"
               message += f"🕐 {current[0]}\n"
 
           url = "https://api.telegram.org/bot" + token + "/sendMessage"
