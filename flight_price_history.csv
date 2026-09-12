@@ -1,0 +1,2 @@
+timestamp_ist,price,currency,source,raw
+2026-09-12T23:00:00+05:30,10889.00,INR,MMT-reference-snapshot,"{\"route\":\"GOI-LKO\",\"flight\":\"6E 374 + 6E 6167\",\"travel_date\":\"2026-12-02\"}"
