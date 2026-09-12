@@ -1,0 +1,10 @@
+{
+  "route": "GOI → LKO",
+  "itinerary": "IndiGo 6E 374 GOI 13:35 → HYD 14:40; 6E 6167 HYD 17:45 → LKO 19:40",
+  "travel_date": "2026-12-02",
+  "cabin": "Economy Saver",
+  "source_name": "authorized-source",
+  "fare_source_url": "",
+  "reference_price": 10889,
+  "currency": "INR"
+}
