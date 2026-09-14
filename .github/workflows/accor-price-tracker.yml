@@ -7,7 +7,7 @@ on:
       - "accor_tracker.py"
       - ".github/workflows/accor-price-tracker.yml"
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
@@ -43,7 +43,7 @@ jobs:
           path = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
           wb = load_workbook(path, data_only=True)
           ws = wb.active
-          row = [ws.cell(ws.max_row, c).value for c in range(1, 12)]
+          row = [ws.cell(ws.max_row, c).value for c in range(1, 14)]
 
           payload = {
               "timestamp": str(row[0]),
@@ -57,6 +57,8 @@ jobs:
               "standardPrice": row[8],
               "priceBasis": str(row[9]),
               "eligible": str(row[10]),
+              "nextDateMemberPrice": row[11],
+              "nextDateStandardPrice": row[12],
           }
 
           r = requests.post(os.environ["ACCOR_SHEET_WEBHOOK"], json=payload, timeout=30)
@@ -102,9 +104,9 @@ jobs:
               print(f"No price change: 20 Sep ₹{current_price:,.0f}; 21 Sep ₹{current_next_price:,.0f}. No alert sent.")
               raise SystemExit(0)
 
-          if current_price <= 4900 or (current_next_price is not None and current_next_price <= 4900):
-              alert_count = 20
-              title = "🚨🚨🚨 ACCOR ₹4,900 ALERT 🚨🚨🚨"
+          if current_price < 4500 or (current_next_price is not None and current_next_price < 4500):
+              alert_count = 10
+              title = "🚨🚨🚨 ACCOR ₹4,500 ALERT 🚨🚨🚨"
           else:
               alert_count = 5
               title = "🚨 ACCOR PRICE CHANGE 🚨"
@@ -115,6 +117,7 @@ jobs:
 
           message = (
               f"{title}\n\n"
+              f"💰 ₹{current_price:,.0f} / STAY | ₹{current_next_price:,.0f} / STAY\n\n"
               "🏨 ibis Jaipur City Centre\n"
               "👤 4 Adults | 2 Rooms\n"
               "🛏️ Composition: 2 + 2 adults\n"
