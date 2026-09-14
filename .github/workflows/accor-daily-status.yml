@@ -1,9 +1,8 @@
 name: Accor Ibis Jaipur Daily Status
 
 on:
-  workflow_dispatch:
   schedule:
-    # 09:00, 11:24, 13:48, 16:12, 18:36 and 21:00 IST (UTC-5:30)
+    # 09:00, 11:24, 13:48, 16:12, 18:36 and 21:00 IST
     - cron: "30 3 * * *"
     - cron: "54 5 * * *"
     - cron: "18 8 * * *"
@@ -35,7 +34,7 @@ jobs:
           python - <<'PY'
           from openpyxl import load_workbook
           from pathlib import Path
-          import os, requests, time
+          import os, requests
 
           path = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
           if not path.exists():
@@ -72,10 +71,7 @@ jobs:
 
           token = os.environ["ACCOR_TELEGRAM_BOT_TOKEN"]
           url = f"https://api.telegram.org/bot{token}/sendMessage"
-          for i in range(6):
-              r = requests.post(url, data={"chat_id": "348797661", "text": message}, timeout=30)
-              r.raise_for_status()
-              print(f"Daily status message {i + 1}/6 sent.")
-              if i < 5:
-                  time.sleep(1)
+          r = requests.post(url, data={"chat_id": "348797661", "text": message}, timeout=30)
+          r.raise_for_status()
+          print("Daily status message sent (1/1).")
           PY
