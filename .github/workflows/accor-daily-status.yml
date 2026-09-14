@@ -1,0 +1,81 @@
+name: Accor Ibis Jaipur Daily Status
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:00, 11:24, 13:48, 16:12, 18:36 and 21:00 IST (UTC-5:30)
+    - cron: "30 3 * * *"
+    - cron: "54 5 * * *"
+    - cron: "18 8 * * *"
+    - cron: "42 10 * * *"
+    - cron: "6 13 * * *"
+    - cron: "30 15 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: accor-ibis-jaipur-daily-status
+  cancel-in-progress: false
+
+jobs:
+  daily-status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install openpyxl requests
+      - name: Send daily status
+        env:
+          ACCOR_TELEGRAM_BOT_TOKEN: ${{ secrets.ACCOR_TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          from openpyxl import load_workbook
+          from pathlib import Path
+          import os, requests, time
+
+          path = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
+          if not path.exists():
+              raise RuntimeError("Accor price history file is not available yet.")
+
+          wb = load_workbook(path, data_only=True)
+          ws = wb.active
+          if ws.max_row < 2:
+              raise RuntimeError("No Ibis Jaipur price data is available yet.")
+
+          row = [ws.cell(ws.max_row, c).value for c in range(1, 14)]
+          current_price = float(row[7])
+          next_price = float(row[11]) if row[11] is not None else None
+          checked_at = str(row[0])
+
+          price_line = (
+              f"💰 ₹{current_price:,.0f} / STAY | ₹{next_price:,.0f} / STAY"
+              if next_price is not None else
+              f"💰 ₹{current_price:,.0f} / STAY"
+          )
+
+          message = (
+              f"{price_line}\n\n"
+              "🏨 ibis Jaipur City Centre\n"
+              "📊 DAILY PRICE STATUS\n\n"
+              f"📅 20 Sep → 22 Sep: ₹{current_price:,.0f} / stay\n"
+              + (f"📅 21 Sep → 23 Sep: ₹{next_price:,.0f} / stay\n\n" if next_price is not None else "\n")
+              + "👤 4 Adults | 2 Rooms\n"
+              "🛏️ Composition: 2 + 2 adults\n"
+              "🏷️ Member rate\n"
+              f"🕒 Last price check: {checked_at}\n\n"
+              "Source: Official Accor rates page"
+          )
+
+          token = os.environ["ACCOR_TELEGRAM_BOT_TOKEN"]
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          for i in range(6):
+              r = requests.post(url, data={"chat_id": "348797661", "text": message}, timeout=30)
+              r.raise_for_status()
+              print(f"Daily status message {i + 1}/6 sent.")
+              if i < 5:
+                  time.sleep(1)
+          PY
