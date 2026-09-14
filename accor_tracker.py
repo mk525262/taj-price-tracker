@@ -9,6 +9,8 @@ HOTEL_ID = "6529"
 HOTEL_NAME = "ibis Jaipur City Centre"
 CHECKIN = "2026-09-20"
 CHECKOUT = "2026-09-22"
+NEXT_CHECKIN = "2026-09-21"
+NEXT_CHECKOUT = "2026-09-23"
 NIGHTS = 2
 ADULTS = 4
 ROOMS = 2
@@ -17,7 +19,7 @@ HOTEL_URL = f"https://all.accor.com/ssr/app/accor/rates/{HOTEL_ID}/index.en.shtm
 HISTORY_FILE = Path("Accor_Ibis_Jaipur_Price_History.xlsx")
 
 
-def save_history(member_price, standard_price):
+def save_history(member_price, standard_price, next_member_price, next_standard_price):
     if HISTORY_FILE.exists():
         wb = load_workbook(HISTORY_FILE)
         ws = wb.active
@@ -25,9 +27,21 @@ def save_history(member_price, standard_price):
         wb = Workbook()
         ws = wb.active
         ws.title = "Price History"
-        ws.append(["Check Time", "Check-in", "Check-out", "Adults", "Rooms", "Composition", "Hotel", "Member Price (INR)", "Standard Price (INR)", "Price Basis", "Eligible"])
+        ws.append([
+            "Check Time", "Check-in", "Check-out", "Adults", "Rooms", "Composition",
+            "Hotel", "Member Price (INR)", "Standard Price (INR)", "Price Basis", "Eligible",
+            "Next Date Member Price (INR)", "Next Date Standard Price (INR)"
+        ])
+    # Keep old files compatible: add new headers if this is an older workbook.
+    if ws.max_column < 13:
+        ws.cell(1, 12).value = "Next Date Member Price (INR)"
+        ws.cell(1, 13).value = "Next Date Standard Price (INR)"
     ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    ws.append([ist_now.strftime("%Y-%m-%d %H:%M:%S"), CHECKIN, CHECKOUT, ADULTS, ROOMS, COMPOSITIONS, HOTEL_NAME, member_price, standard_price, "Official Accor displayed stay price", "YES"])
+    ws.append([
+        ist_now.strftime("%Y-%m-%d %H:%M:%S"), CHECKIN, CHECKOUT, ADULTS, ROOMS, COMPOSITIONS,
+        HOTEL_NAME, member_price, standard_price, "Official Accor displayed stay price", "YES",
+        next_member_price, next_standard_price
+    ])
     wb.save(HISTORY_FILE)
     print(f"Excel history saved: {HISTORY_FILE}", flush=True)
 
@@ -46,76 +60,85 @@ def parse_displayed_price(text):
     return None
 
 
+def fetch_stay_price(context, checkin, checkout):
+    target_request_seen = False
+
+    def route_graphql(route):
+        nonlocal target_request_seen
+        req = route.request
+        if "api.accor.com/bff/v1/graphql" not in req.url:
+            route.continue_()
+            return
+        raw = req.post_data or ""
+        if "HotelPageHot" not in raw:
+            route.continue_()
+            return
+        try:
+            payload = json.loads(raw)
+            variables = payload.get("variables", {})
+            variables["dateIn"] = checkin
+            variables["dateOut"] = checkout
+            variables["nbAdults"] = 2
+            variables["totalRoomInBasket"] = ROOMS
+            variables["countryMarket"] = "IN"
+            variables["currency"] = "INR"
+            payload["variables"] = variables
+            raw = json.dumps(payload, separators=(",", ":"))
+            target_request_seen = True
+            print("FORCED HOTELPAGEHOT VARIABLES:", json.dumps({
+                "dateIn": variables.get("dateIn"),
+                "dateOut": variables.get("dateOut"),
+                "nbAdults": variables.get("nbAdults"),
+                "totalRoomInBasket": variables.get("totalRoomInBasket"),
+                "countryMarket": variables.get("countryMarket"),
+                "currency": variables.get("currency"),
+            }), flush=True)
+            route.continue_(post_data=raw)
+        except Exception as e:
+            print(f"GraphQL rewrite error: {e}", flush=True)
+            route.continue_()
+
+    page = context.new_page()
+    page.route("**/api.accor.com/bff/v1/graphql", route_graphql)
+    target_url = HOTEL_URL + f"?dateIn={checkin}&nights={NIGHTS}&compositions={COMPOSITIONS}&stayplus=false&snu=false&accessibleRooms=false&hideWDR=false&productCode=null&hideHotelDetails=false"
+    print(f"Search target: {checkin} → {checkout} | {ADULTS} Adults | {ROOMS} Rooms | 2+2 composition | Member rate", flush=True)
+    page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+    print("FINAL URL:", page.url, flush=True)
+    page.wait_for_timeout(18000)
+    body = page.locator("body").inner_text(timeout=10000)
+    clean = re.sub(r"\s+", " ", body.replace("\u00a0", " ")).strip()
+    print("SEARCH STATE DEBUG:", clean[:3500], flush=True)
+
+    if not target_request_seen:
+        page.close()
+        raise RuntimeError(f"Accor HotelPageHot target request was not captured for {checkin} → {checkout}.")
+    if "2 nights 2 adults" not in clean:
+        page.close()
+        raise RuntimeError(f"Accor 2-night room result was not confirmed for {checkin} → {checkout}.")
+
+    prices = parse_displayed_price(body)
+    page.close()
+    if not prices:
+        raise RuntimeError(f"Official Accor displayed member/public price was not found for {checkin} → {checkout}.")
+    return prices
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(locale="en-IN")
-        target_request_seen = False
+        try:
+            member_price, standard_price = fetch_stay_price(context, CHECKIN, CHECKOUT)
+            next_member_price, next_standard_price = fetch_stay_price(context, NEXT_CHECKIN, NEXT_CHECKOUT)
 
-        def route_graphql(route):
-            nonlocal target_request_seen
-            req = route.request
-            if "api.accor.com/bff/v1/graphql" not in req.url:
-                route.continue_()
-                return
-            raw = req.post_data or ""
-            if "HotelPageHot" not in raw:
-                route.continue_()
-                return
-            try:
-                payload = json.loads(raw)
-                variables = payload.get("variables", {})
-                variables["dateIn"] = CHECKIN
-                variables["dateOut"] = CHECKOUT
-                variables["nbAdults"] = 2
-                variables["totalRoomInBasket"] = ROOMS
-                variables["countryMarket"] = "IN"
-                variables["currency"] = "INR"
-                payload["variables"] = variables
-                raw = json.dumps(payload, separators=(",", ":"))
-                target_request_seen = True
-                print("FORCED HOTELPAGEHOT VARIABLES:", json.dumps({
-                    "dateIn": variables.get("dateIn"),
-                    "dateOut": variables.get("dateOut"),
-                    "nbAdults": variables.get("nbAdults"),
-                    "totalRoomInBasket": variables.get("totalRoomInBasket"),
-                    "countryMarket": variables.get("countryMarket"),
-                    "currency": variables.get("currency"),
-                }), flush=True)
-                route.continue_(post_data=raw)
-            except Exception as e:
-                print(f"GraphQL rewrite error: {e}", flush=True)
-                route.continue_()
-
-        context.route("**/api.accor.com/bff/v1/graphql", route_graphql)
-        page = context.new_page()
-        target_url = HOTEL_URL + f"?dateIn={CHECKIN}&nights={NIGHTS}&compositions={COMPOSITIONS}&stayplus=false&snu=false&accessibleRooms=false&hideWDR=false&productCode=null&hideHotelDetails=false"
-        print("Method : ACCOR OFFICIAL RATES PAGE", flush=True)
-        print(f"Search target: {CHECKIN} → {CHECKOUT} | {ADULTS} Adults | {ROOMS} Rooms | 2+2 composition | Member rate", flush=True)
-        page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-        print("FINAL URL:", page.url, flush=True)
-        page.wait_for_timeout(18000)
-        body = page.locator("body").inner_text(timeout=10000)
-        clean = re.sub(r"\s+", " ", body.replace("\u00a0", " ")).strip()
-        print("SEARCH STATE DEBUG:", clean[:4500], flush=True)
-
-        if not target_request_seen:
+            print(f"OFFICIAL ACCOR MEMBER {CHECKIN} : ₹{member_price:,.0f} / stay", flush=True)
+            print(f"OFFICIAL ACCOR STANDARD {CHECKIN} : ₹{standard_price:,.0f} / stay", flush=True)
+            print(f"OFFICIAL ACCOR MEMBER {NEXT_CHECKIN} : ₹{next_member_price:,.0f} / stay", flush=True)
+            print(f"OFFICIAL ACCOR STANDARD {NEXT_CHECKIN} : ₹{next_standard_price:,.0f} / stay", flush=True)
+            save_history(member_price, standard_price, next_member_price, next_standard_price)
+            print("Price check completed. Telegram alerts are handled by GitHub Actions.", flush=True)
+        finally:
             browser.close()
-            raise RuntimeError("Accor HotelPageHot target request was not captured; refusing to save a possibly wrong price.")
-        if "2 nights 2 adults" not in clean:
-            browser.close()
-            raise RuntimeError("Accor forced 2-night room result was not confirmed; refusing to save a possibly wrong price.")
-
-        prices = parse_displayed_price(body)
-        if not prices:
-            browser.close()
-            raise RuntimeError("Official Accor displayed member/public price was not found; refusing to save a possibly wrong price.")
-        member_price, standard_price = prices
-        print(f"OFFICIAL ACCOR MEMBER : ₹{member_price:,.0f} / stay", flush=True)
-        print(f"OFFICIAL ACCOR STANDARD : ₹{standard_price:,.0f} / stay", flush=True)
-        save_history(member_price, standard_price)
-        print("Price check completed. Telegram alerts are handled by GitHub Actions.", flush=True)
-        browser.close()
 
 
 if __name__ == "__main__":
