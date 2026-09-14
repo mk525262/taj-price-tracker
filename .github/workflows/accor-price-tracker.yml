@@ -83,32 +83,48 @@ jobs:
               print("Not enough history for price-change alert.")
               raise SystemExit(0)
 
-          previous = [ws.cell(ws.max_row - 1, c).value for c in range(1, 12)]
-          current = [ws.cell(ws.max_row, c).value for c in range(1, 12)]
+          previous = [ws.cell(ws.max_row - 1, c).value for c in range(1, 14)]
+          current = [ws.cell(ws.max_row, c).value for c in range(1, 14)]
+
           previous_price = float(previous[7])
           current_price = float(current[7])
+          previous_next_price = float(previous[11]) if previous[11] is not None else None
+          current_next_price = float(current[11]) if current[11] is not None else None
 
-          if previous_price == current_price:
-              print(f"No member-price change: ₹{current_price:,.0f}. No alert sent.")
+          target_changed = previous_price != current_price
+          next_date_changed = (
+              previous_next_price is not None
+              and current_next_price is not None
+              and previous_next_price != current_next_price
+          )
+
+          if not target_changed and not next_date_changed:
+              print(f"No price change: 20 Sep ₹{current_price:,.0f}; 21 Sep ₹{current_next_price:,.0f}. No alert sent.")
               raise SystemExit(0)
 
-          if current_price <= 4900:
+          if current_price <= 4900 or (current_next_price is not None and current_next_price <= 4900):
               alert_count = 20
               title = "🚨🚨🚨 ACCOR ₹4,900 ALERT 🚨🚨🚨"
           else:
               alert_count = 5
               title = "🚨 ACCOR PRICE CHANGE 🚨"
 
+          next_standard_text = (
+              f"₹{float(current[12]):,.0f} / stay" if current[12] is not None else "N/A"
+          )
+
           message = (
               f"{title}\n\n"
-              f"₹{current_price:,.0f} / STAY\n"
-              f"Previous: ₹{previous_price:,.0f} / stay\n\n"
               "🏨 ibis Jaipur City Centre\n"
-              "📅 2026-09-20 → 2026-09-22\n"
               "👤 4 Adults | 2 Rooms\n"
               "🛏️ Composition: 2 + 2 adults\n"
               "🏷️ Member rate\n\n"
-              f"Standard: ₹{float(current[8]):,.0f} / stay\n\n"
+              f"📅 20 Sep → 22 Sep: ₹{current_price:,.0f} / stay\n"
+              f"📅 21 Sep → 23 Sep: ₹{current_next_price:,.0f} / stay\n\n"
+              f"Previous 20 Sep → 22 Sep: ₹{previous_price:,.0f} / stay\n"
+              f"Previous 21 Sep → 23 Sep: ₹{previous_next_price:,.0f} / stay\n\n"
+              f"Standard 20 Sep → 22 Sep: ₹{float(current[8]):,.0f} / stay\n"
+              f"Standard 21 Sep → 23 Sep: {next_standard_text}\n\n"
               "Source: Official Accor rates page"
           )
 
