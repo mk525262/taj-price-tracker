@@ -99,12 +99,16 @@ jobs:
               and current_next_price is not None
               and previous_next_price != current_next_price
           )
+          manual_test = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
-          if not target_changed and not next_date_changed:
+          if not manual_test and not target_changed and not next_date_changed:
               print(f"No price change: 20 Sep ₹{current_price:,.0f}; 21 Sep ₹{current_next_price:,.0f}. No alert sent.")
               raise SystemExit(0)
 
-          if current_price < 4500 or (current_next_price is not None and current_next_price < 4500):
+          if manual_test:
+              alert_count = 1
+              title = "🧪 ACCOR TEST PRICE"
+          elif current_price < 4500 or (current_next_price is not None and current_next_price < 4500):
               alert_count = 10
               title = "🚨🚨🚨 ACCOR ₹4,500 ALERT 🚨🚨🚨"
           else:
@@ -136,7 +140,7 @@ jobs:
           for i in range(alert_count):
               r = requests.post(url, data={"chat_id": "348797661", "text": message}, timeout=30)
               r.raise_for_status()
-              print(f"Price-change alert {i + 1}/{alert_count} sent.")
+              print(f"Telegram message {i + 1}/{alert_count} sent.")
               if i < alert_count - 1:
                   time.sleep(1)
           PY
