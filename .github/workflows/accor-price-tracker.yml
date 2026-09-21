@@ -2,12 +2,6 @@ name: Accor Ibis Jaipur Price Tracker
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "accor_tracker.py"
-      - ".github/workflows/accor-price-tracker.yml"
-  schedule:
-    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
