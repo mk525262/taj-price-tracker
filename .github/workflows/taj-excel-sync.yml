@@ -139,17 +139,6 @@ jobs:
                   if i < count - 1:
                       time.sleep(1)
 
-          # TEMPORARY TEST MODE: send one status message on every 5-minute run.
-          test_message = (
-              "🧪 TAJ 5-MIN TEST UPDATE\\n\\n"
-              f"💰 LOWEST PRICE: ₹{int(float(current[5])):,}\\n"
-              "🏨 Taj City Centre Gurugram\\n"
-              "📅 25 Dec 2026 → 26 Dec 2026\\n"
-              f"🕐 {current[0]}\\n\\n"
-              "✅ Tracker checked successfully."
-          )
-          send(test_message, 1)
-
           lowest = int(float(current[5]))
           labels = [
               ("🛏 Twin Member", current[1]),
