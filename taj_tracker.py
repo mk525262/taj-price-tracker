@@ -7,7 +7,7 @@ from pathlib import Path
 import os
 from openpyxl import Workbook, load_workbook
 
-URL = "https://www.tajhotels.com/en-in/bookings/landing-page?hotelId=d21c3bf6-f508-47ae-a456-540429b02b0d"
+URL = "https://www.tajhotels.com/en-in/hotels/taj-city-centre-gurugram?adults=1&children=0&from=25%2F12%2F2026&overrideSessionDates=true&rooms=1&to=26%2F12%2F2026"
 
 CHECK_EVERY_MINUTES = 30
 
@@ -1107,9 +1107,46 @@ def get_taj_api_response(page, context):
     # request, establishing the browser cookies/session and giving us the exact
     # browser headers required by the security layer.
     page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(7000)
+    page.wait_for_timeout(10000)
+
+    # The hotel page normally performs availability search automatically when
+    # dates are supplied in the URL. If the network request is not emitted,
+    # try the visible SEARCH / CHECK AVAILABILITY controls once.
+    if not captured["headers"]:
+        for pattern in (
+            r"^SEARCH$",
+            r"^Search$",
+            r"CHECK AVAILABILITY",
+            r"VIEW ROOMS",
+        ):
+            try:
+                controls = page.get_by_text(re.compile(pattern, re.I))
+                for i in range(min(controls.count(), 10)):
+                    control = controls.nth(i)
+                    if not control.is_visible():
+                        continue
+                    control.click(timeout=5000)
+                    page.wait_for_timeout(7000)
+                    if captured["headers"]:
+                        break
+                if captured["headers"]:
+                    break
+            except Exception:
+                pass
 
     if not captured["headers"]:
+        try:
+            buttons = page.locator("button, [role='button']")
+            visible = []
+            for i in range(min(buttons.count(), 80)):
+                b = buttons.nth(i)
+                if b.is_visible():
+                    txt = re.sub(r"\\s+", " ", b.inner_text()).strip()
+                    if txt:
+                        visible.append(txt[:80])
+            print("Visible booking controls:", visible[:30])
+        except Exception:
+            pass
         raise RuntimeError("Taj availability API request browser se capture nahi hui.")
 
     print("Taj browser API request captured.")
@@ -1309,7 +1346,9 @@ with sync_playwright() as p:
     print("=" * 65)
 
     try:
-        check_price(p)
+        result = check_price(p)
+        if result is None:
+            raise RuntimeError("Taj price check failed; no fresh API price was saved.")
     except Exception as e:
         print("\nCLOUD CHECK ERROR:", e)
         raise
