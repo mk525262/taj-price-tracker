@@ -91,6 +91,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import json
           import time
           import urllib.parse
           import urllib.request
@@ -322,7 +323,8 @@ jobs:
                   writer.writerow(row)
           PY
 
-          git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated taj_last_state.json
+          git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
+          if [ -f taj_last_state.json ]; then git add taj_last_state.json; fi
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
           git push origin HEAD:main
