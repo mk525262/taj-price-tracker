@@ -7,8 +7,9 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync-5m.yml"
   schedule:
-    # Explicitly enumerate every 5-minute UTC slot to avoid scheduler parsing ambiguity.
-    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
+    # Run every five minutes using an explicit non-UTC timezone.
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+      timezone: "Asia/Kolkata"
 
 permissions:
   contents: write
