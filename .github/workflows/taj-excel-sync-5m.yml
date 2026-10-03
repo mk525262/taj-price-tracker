@@ -1,0 +1,249 @@
+name: Taj Excel History Sync 5m
+# Taj browser/API capture reliability update (booking-flow test)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/taj-excel-sync-5m.yml"
+  schedule:
+    # Explicitly enumerate every 5-minute UTC slot to avoid scheduler parsing ambiguity.
+    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taj-excel-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-taj-excel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Run Taj check for price history
+        run: xvfb-run -a python taj_tracker.py
+
+      - name: Convert Taj timestamps to India time
+        run: python taj_timezone_migration.py
+
+      - name: Sync latest Taj price to Google Sheet
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          from openpyxl import load_workbook
+
+          webhook = "https://script.google.com/macros/s/AKfycbwq6S0UJXOjaz8UoI5AQbukGXi_4kWrllPEqTOZMReJCRwmhzc91N7esrdWb8LZ8g8y/exec"
+          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
+          ws = wb.active
+          row = list(ws.iter_rows(values_only=True))[-1]
+
+          payload = {
+              "timestamp": row[0],
+              "twinMember": row[1],
+              "twinStandard": row[2],
+              "kingMember": row[3],
+              "kingStandard": row[4],
+              "lowestPrice": row[5],
+              "lowestRoom": row[6],
+              "lowestRateType": row[7],
+          }
+
+          data = json.dumps(payload).encode("utf-8")
+          request = urllib.request.Request(
+              webhook,
+              data=data,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              result = json.loads(response.read().decode("utf-8"))
+
+          print("Google Sheet response:", result)
+          if not result.get("success"):
+              raise SystemExit("Google Sheet sync failed: " + str(result))
+
+          print("Latest Taj price synced to Google Sheet.")
+          PY
+
+      - name: Send current Taj price to Telegram every 5 minutes
+        env:
+          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+          from openpyxl import load_workbook
+
+          path = "Taj_Price_History.xlsx"
+          wb = load_workbook(path, read_only=True, data_only=True)
+          ws = wb.active
+          rows = list(ws.iter_rows(values_only=True))
+
+          if len(rows) < 2:
+              print("No price row available for Telegram.")
+              raise SystemExit(0)
+
+          current = rows[-1]
+
+          token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
+          if not token:
+              raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
+
+          chat_id = "348797661"
+          url = "https://api.telegram.org/bot" + token + "/sendMessage"
+
+          lowest = int(float(current[5]))
+          labels = [
+              ("🛏 Twin Member", current[1]),
+              ("🛏 Twin Standard", current[2]),
+              ("🛏 King Member", current[3]),
+              ("🛏 King Standard", current[4]),
+          ]
+
+          message = (
+              "💰 TAJ PRICE UPDATE\n\n"
+              f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
+              "🏨 Taj City Centre Gurugram\n"
+              "📅 25 Dec 2026 → 26 Dec 2026\n"
+              "👤 1 Guest | 1 Room\n\n"
+          )
+
+          for label, value in labels:
+              if value is not None:
+                  message += f"{label}: ₹{int(float(value)):,}\n"
+
+          message += f"🕐 {current[0]}"
+
+          data = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message
+          }).encode("utf-8")
+
+          req = urllib.request.Request(url, data=data, method="POST")
+          with urllib.request.urlopen(req, timeout=20) as response:
+              response.read()
+
+          print("Current real Taj price message sent to Telegram.")
+          PY
+
+      - name: Export Taj Excel history to CSV
+        run: |
+          python - <<'PY'
+          import csv
+          from openpyxl import load_workbook
+          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
+          ws = wb.active
+          with open("Taj_Price_History.csv", "w", newline="", encoding="utf-8") as f:
+              writer = csv.writer(f)
+              for row in ws.iter_rows(values_only=True):
+                  writer.writerow(row)
+          PY
+
+      - name: Commit Taj price history
+        if: always()
+        run: |
+          if [ ! -f Taj_Price_History.xlsx ]; then
+            echo "No Taj Excel history created; nothing to commit."
+            exit 0
+          fi
+
+          # Save the row produced by this run before refreshing from the latest main.
+          cp Taj_Price_History.xlsx /tmp/Taj_Price_History.latest.xlsx
+          if [ -f taj_last_state.json ]; then cp taj_last_state.json /tmp/taj_last_state.json; fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # A queued run can start from an older commit while another run has
+          # already pushed newer history. Rebase of binary XLSX files can conflict,
+          # so refresh main first and merge this run's latest row into it.
+          git fetch origin main
+          git reset --hard origin/main
+          if [ -f /tmp/taj_last_state.json ]; then cp /tmp/taj_last_state.json taj_last_state.json; fi
+
+          python - <<'PY'
+          from copy import copy
+          from datetime import datetime
+          from openpyxl import load_workbook
+
+          latest = load_workbook("/tmp/Taj_Price_History.latest.xlsx", read_only=True, data_only=True)
+          latest_ws = latest.active
+          latest_row = list(latest_ws.iter_rows(values_only=True))[-1]
+
+          base = load_workbook("Taj_Price_History.xlsx")
+          ws = base.active
+
+          base_last = ws.max_row
+          existing_row = [ws.cell(base_last, col).value for col in range(1, len(latest_row) + 1)]
+
+          def comparable(v):
+              if isinstance(v, datetime):
+                  return v.replace(tzinfo=None)
+              if v is None:
+                  return None
+              return str(v)
+
+          new_ts = comparable(latest_row[0])
+          old_ts = comparable(existing_row[0]) if existing_row else None
+
+          if old_ts is None:
+              ws.append(list(latest_row))
+              print("Added first Taj price row.")
+          elif new_ts == old_ts:
+              if [comparable(v) for v in latest_row] != [comparable(v) for v in existing_row]:
+                  for col, value in enumerate(latest_row, start=1):
+                      ws.cell(base_last, col).value = value
+                  print("Updated the existing Taj row for the same timestamp.")
+              else:
+                  print("Latest Taj row already exists; no duplicate added.")
+          else:
+              target_row = base_last + 1
+              ws.append(list(latest_row))
+              for col in range(1, len(latest_row) + 1):
+                  source = ws.cell(base_last, col)
+                  target = ws.cell(target_row, col)
+                  if source.has_style:
+                      target._style = copy(source._style)
+                  if source.number_format:
+                      target.number_format = source.number_format
+              print("Merged the fresh Taj row into current main history.")
+
+          base.save("Taj_Price_History.xlsx")
+          PY
+
+          python - <<'PY'
+          import csv
+          from openpyxl import load_workbook
+          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
+          ws = wb.active
+          with open("Taj_Price_History.csv", "w", newline="", encoding="utf-8") as f:
+              writer = csv.writer(f)
+              for row in ws.iter_rows(values_only=True):
+                  writer.writerow(row)
+          PY
+
+          git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
+          if [ -f taj_last_state.json ]; then git add taj_last_state.json; fi
+          git diff --cached --quiet && exit 0
+          git commit -m "Update Taj price history"
+          git push origin HEAD:main
