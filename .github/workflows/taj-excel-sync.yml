@@ -6,9 +6,6 @@ on:
   push:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
-  schedule:
-    # Explicitly enumerate every 5-minute UTC slot to avoid scheduler parsing ambiguity.
-    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
 
 permissions:
   contents: write
