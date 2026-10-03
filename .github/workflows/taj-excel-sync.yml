@@ -1,5 +1,5 @@
 name: Taj Excel History Sync
-# Taj browser/API capture reliability update (headed test)
+# Taj browser/API capture reliability update (booking-flow test)
 
 on:
   workflow_dispatch:
