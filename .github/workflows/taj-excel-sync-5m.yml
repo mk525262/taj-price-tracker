@@ -87,12 +87,14 @@ jobs:
           print("Latest Taj price synced to Google Sheet.")
           PY
 
-      - name: Send current Taj price to Telegram every 5 minutes
+      - name: Apply old Taj Telegram alert rules
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
           python - <<'PY'
+          import datetime as dt
           import os
+          import time
           import urllib.parse
           import urllib.request
           from openpyxl import load_workbook
@@ -103,50 +105,107 @@ jobs:
           rows = list(ws.iter_rows(values_only=True))
 
           if len(rows) < 2:
-              print("No price row available for Telegram.")
+              print("Not enough history rows for Telegram.")
               raise SystemExit(0)
 
           current = rows[-1]
+          previous = rows[-2] if len(rows) >= 3 else None
 
           token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
           if not token:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
-          chat_id = "348797661"
-          url = "https://api.telegram.org/bot" + token + "/sendMessage"
+          current_prices = tuple(current[1:5])
+          previous_prices = tuple(previous[1:5]) if previous else current_prices
+          changed = previous is not None and current_prices != previous_prices
 
-          lowest = int(float(current[5]))
-          labels = [
-              ("🛏 Twin Member", current[1]),
-              ("🛏 Twin Standard", current[2]),
-              ("🛏 King Member", current[3]),
-              ("🛏 King Standard", current[4]),
-          ]
-
-          message = (
-              "💰 TAJ PRICE UPDATE\n\n"
-              f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
-              "🏨 Taj City Centre Gurugram\n"
-              "📅 25 Dec 2026 → 26 Dec 2026\n"
-              "👤 1 Guest | 1 Room\n\n"
+          # Scheduled check runs every 5 minutes; normal timed updates are sent
+          # once at 09:00, 13:00, 17:00 and 21:00 IST.
+          now_ist = dt.datetime.now(dt.timezone.utc).astimezone(
+              dt.timezone(dt.timedelta(hours=5, minutes=30))
+          )
+          timed_update = (
+              now_ist.hour in (9, 13, 17, 21)
+              and now_ist.minute < 5
           )
 
-          for label, value in labels:
-              if value is not None:
-                  message += f"{label}: ₹{int(float(value)):,}\n"
+          previous_lowest = float(previous[5]) if previous and previous[5] is not None else None
+          current_lowest = float(current[5])
 
-          message += f"🕐 {current[0]}"
+          # Special alert has priority when the lowest price crosses from
+          # >= ₹8,000 to < ₹8,000.
+          crossed_8000 = (
+              previous_lowest is not None
+              and previous_lowest >= 8000
+              and current_lowest < 8000
+          )
 
-          data = urllib.parse.urlencode({
-              "chat_id": chat_id,
-              "text": message
-          }).encode("utf-8")
+          alert_count = 0
+          if crossed_8000:
+              alert_count = 20
+              message = (
+                  "🚨🚨 TAJ SPECIAL PRICE ALERT 🚨🚨\n\n"
+                  "🏨 Taj City Centre Gurugram\n"
+                  "📅 25 Dec 2026 → 26 Dec 2026\n"
+                  "👤 1 Guest | 1 Room\n\n"
+                  f"💰 LOWEST PRICE: ₹{int(current_lowest):,}\n"
+                  "🔥 PRICE BELOW ₹8,000!\n"
+                  f"🕐 {current[0]}"
+              )
+          elif changed:
+              alert_count = 5
+              labels = [
+                  ("🛏 Twin Member", current[1]),
+                  ("🛏 Twin Standard", current[2]),
+                  ("🛏 King Member", current[3]),
+                  ("🛏 King Standard", current[4]),
+              ]
+              message = (
+                  "🚨 TAJ PRICE CHANGE\n\n"
+                  f"💰 LOWEST PRICE: ₹{int(current_lowest):,}\n\n"
+                  "🏨 Taj City Centre Gurugram\n"
+                  "📅 25 Dec 2026 → 26 Dec 2026\n"
+                  "👤 1 Guest | 1 Room\n\n"
+              )
+              for label, value in labels:
+                  if value is not None:
+                      message += f"{label}: ₹{int(float(value)):,}\n"
+              message += f"🕐 {current[0]}"
+          elif timed_update:
+              alert_count = 1
+              message = (
+                  "💰 TAJ PRICE UPDATE\n\n"
+                  f"💰 LOWEST PRICE: ₹{int(current_lowest):,}\n\n"
+                  "🏨 Taj City Centre Gurugram\n"
+                  "📅 25 Dec 2026 → 26 Dec 2026\n"
+                  "👤 1 Guest | 1 Room\n\n"
+              )
+              labels = [
+                  ("🛏 Twin Member", current[1]),
+                  ("🛏 Twin Standard", current[2]),
+                  ("🛏 King Member", current[3]),
+                  ("🛏 King Standard", current[4]),
+              ]
+              for label, value in labels:
+                  if value is not None:
+                      message += f"{label}: ₹{int(float(value)):,}\n"
+              message += f"🕐 {current[0]}"
+          else:
+              print("No old-rule Telegram alert due this run.")
+              raise SystemExit(0)
 
-          req = urllib.request.Request(url, data=data, method="POST")
-          with urllib.request.urlopen(req, timeout=20) as response:
-              response.read()
-
-          print("Current real Taj price message sent to Telegram.")
+          url = "https://api.telegram.org/bot" + token + "/sendMessage"
+          for i in range(alert_count):
+              data = urllib.parse.urlencode({
+                  "chat_id": "348797661",
+                  "text": message
+              }).encode("utf-8")
+              req = urllib.request.Request(url, data=data, method="POST")
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  response.read()
+              print(f"Telegram alert {i + 1}/{alert_count} sent.")
+              if i < alert_count - 1:
+                  time.sleep(1)
           PY
 
       - name: Export Taj Excel history to CSV
