@@ -36,7 +36,7 @@ def create_browser(p):
     print("Fresh browser open kar raha hoon...")
 
     browser = p.chromium.launch(
-        headless=True,
+        headless=False,
         args=["--deny-permission-prompts"]
     )
 
@@ -1107,7 +1107,9 @@ def get_taj_api_response(page, context):
     # request, establishing the browser cookies/session and giving us the exact
     # browser headers required by the security layer.
     page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(10000)
+    print("Taj page URL after load:", page.url)
+    print("Taj page title:", page.title())
+    page.wait_for_timeout(15000)
 
     # The hotel page normally performs availability search automatically when
     # dates are supplied in the URL. If the network request is not emitted,
