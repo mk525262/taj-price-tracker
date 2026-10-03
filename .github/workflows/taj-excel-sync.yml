@@ -6,8 +6,9 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
   schedule:
-    # Run every 30 minutes. GitHub's schedule is UTC by default.
+    # Run every 30 minutes in India time.
     - cron: "*/30 * * * *"
+      timezone: "Asia/Kolkata"
 
 permissions:
   contents: write
@@ -177,7 +178,7 @@ jobs:
           # these four hours occur at minute 00 in IST.
           now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
           scheduled_hours = {9, 13, 17, 21}
-          if now_ist.hour in scheduled_hours and now_ist.minute == 0:
+          if (not crossed_8000) and (not changed) and now_ist.hour in scheduled_hours and now_ist.minute == 0:
               message = (
                   "💰 TAJ PRICE UPDATE\n\n"
                   f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
@@ -214,10 +215,89 @@ jobs:
             echo "No Taj Excel history created; nothing to commit."
             exit 0
           fi
+
+          # Save the row produced by this run before refreshing from the latest main.
+          cp Taj_Price_History.xlsx /tmp/Taj_Price_History.latest.xlsx
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # A queued run can start from an older commit while another run has
+          # already pushed newer history. Rebase of binary XLSX files can conflict,
+          # so refresh main first and merge this run's latest row into it.
+          git fetch origin main
+          git reset --hard origin/main
+
+          python - <<'PY'
+          from copy import copy
+          from datetime import datetime
+          from openpyxl import load_workbook
+
+          latest = load_workbook("/tmp/Taj_Price_History.latest.xlsx", read_only=True, data_only=True)
+          latest_ws = latest.active
+          latest_row = list(latest_ws.iter_rows(values_only=True))[-1]
+
+          base = load_workbook("Taj_Price_History.xlsx")
+          ws = base.active
+
+          base_last = ws.max_row
+          existing_row = [ws.cell(base_last, col).value for col in range(1, len(latest_row) + 1)]
+
+          def comparable(v):
+              if isinstance(v, datetime):
+                  return v.replace(tzinfo=None)
+              if v is None:
+                  return None
+              return str(v)
+
+          new_ts = comparable(latest_row[0])
+          old_ts = comparable(existing_row[0]) if existing_row else None
+
+          if old_ts is None:
+              ws.append(list(latest_row))
+              print("Added first Taj price row.")
+          elif new_ts == old_ts:
+              if [comparable(v) for v in latest_row] != [comparable(v) for v in existing_row]:
+                  for col, value in enumerate(latest_row, start=1):
+                      ws.cell(base_last, col).value = value
+                  print("Updated the existing Taj row for the same timestamp.")
+              else:
+                  print("Latest Taj row already exists; no duplicate added.")
+          else:
+              try:
+                  should_append = new_ts > old_ts
+              except TypeError:
+                  should_append = str(new_ts) > str(old_ts)
+
+              if should_append:
+                  target_row = base_last + 1
+                  ws.append(list(latest_row))
+                  for col in range(1, len(latest_row) + 1):
+                      source = ws.cell(base_last, col)
+                      target = ws.cell(target_row, col)
+                      if source.has_style:
+                          target._style = copy(source._style)
+                      if source.number_format:
+                          target.number_format = source.number_format
+                  print("Merged the latest Taj row into current main history.")
+              else:
+                  print("Current run is older than main; keeping main history unchanged.")
+
+          base.save("Taj_Price_History.xlsx")
+          PY
+
+          python - <<'PY'
+          import csv
+          from openpyxl import load_workbook
+          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
+          ws = wb.active
+          with open("Taj_Price_History.csv", "w", newline="", encoding="utf-8") as f:
+              writer = csv.writer(f)
+              for row in ws.iter_rows(values_only=True):
+                  writer.writerow(row)
+          PY
+
           git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
           git diff --cached --quiet && exit 0
-          git commit -m "Add Taj special price alert"
-          git pull --rebase origin main
-          git push
+          git commit -m "Update Taj price history"
+          git push origin HEAD:main
