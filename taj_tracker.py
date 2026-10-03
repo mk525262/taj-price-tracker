@@ -1093,8 +1093,11 @@ def rate_is_100pct_nonrefundable(rate):
 
 def get_taj_api_response(page, context):
     captured = {"headers": None, "url": None, "body": None}
+    api_requests = []
 
     def capture_request(req):
+        if TAJ_API_HOST in req.url:
+            api_requests.append((req.method, req.url))
         if TAJ_API_HOST in req.url and TAJ_API_PATH in req.url and req.method == "POST":
             if captured["headers"] is None:
                 captured["headers"] = req.all_headers()
@@ -1111,11 +1114,12 @@ def get_taj_api_response(page, context):
     print("Taj page title:", page.title())
     page.wait_for_timeout(15000)
 
-    # The hotel page normally performs availability search automatically when
-    # dates are supplied in the URL. If the network request is not emitted,
-    # try the visible SEARCH / CHECK AVAILABILITY controls once.
+    # If the hotel page did not emit the availability call automatically,
+    # open the booking flow and then try the visible search controls.
     if not captured["headers"]:
         for pattern in (
+            r"^BOOK A STAY$",
+            r"^BOOK NOW$",
             r"^SEARCH$",
             r"^Search$",
             r"CHECK AVAILABILITY",
