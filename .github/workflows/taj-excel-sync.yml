@@ -1,4 +1,5 @@
 name: Taj Excel History Sync
+# Taj browser/API capture reliability update
 
 on:
   workflow_dispatch:
