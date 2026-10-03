@@ -5,9 +5,6 @@ on:
   workflow_dispatch:
   repository_dispatch:
     types: [taj_5m]
-  push:
-    paths:
-      - ".github/workflows/taj-excel-sync-5m.yml"
 
 permissions:
   contents: write
