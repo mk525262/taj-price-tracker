@@ -107,7 +107,16 @@ jobs:
               raise SystemExit(0)
 
           current = rows[-1]
-          previous = rows[-2] if len(rows) >= 3 else None
+
+          # Alert comparisons use persistent state instead of the last Excel row,
+          # because the historical workbook contains older out-of-order test rows.
+          state_path = "taj_last_state.json"
+          previous = None
+          try:
+              with open(state_path, "r", encoding="utf-8") as f:
+                  previous = json.load(f)
+          except (FileNotFoundError, json.JSONDecodeError):
+              previous = None
 
           token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
           if not token:
@@ -140,9 +149,18 @@ jobs:
           changed = False
           crossed_8000 = False
           if previous is not None:
-              changed = tuple(previous[1:5]) != tuple(current[1:5])
+              previous_rates = (
+                  previous.get("twinMember"),
+                  previous.get("twinStandard"),
+                  previous.get("kingMember"),
+                  previous.get("kingStandard"),
+              )
+              changed = previous_rates != tuple(current[1:5])
               try:
-                  crossed_8000 = float(previous[5]) >= 8000 and float(current[5]) < 8000
+                  crossed_8000 = (
+                      float(previous.get("lowestPrice")) >= 8000
+                      and float(current[5]) < 8000
+                  )
               except (TypeError, ValueError):
                   crossed_8000 = False
 
@@ -193,6 +211,18 @@ jobs:
               message += f"🕐 {current[0]}"
               send(message, 1)
 
+          with open(state_path, "w", encoding="utf-8") as f:
+              json.dump({
+                  "timestamp": current[0],
+                  "twinMember": current[1],
+                  "twinStandard": current[2],
+                  "kingMember": current[3],
+                  "kingStandard": current[4],
+                  "lowestPrice": current[5],
+                  "lowestRoom": current[6],
+                  "lowestRateType": current[7],
+              }, f, ensure_ascii=False, indent=2)
+
           print("Telegram alert processing complete.")
           PY
 
@@ -219,6 +249,7 @@ jobs:
 
           # Save the row produced by this run before refreshing from the latest main.
           cp Taj_Price_History.xlsx /tmp/Taj_Price_History.latest.xlsx
+          if [ -f taj_last_state.json ]; then cp taj_last_state.json /tmp/taj_last_state.json; fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -228,6 +259,7 @@ jobs:
           # so refresh main first and merge this run's latest row into it.
           git fetch origin main
           git reset --hard origin/main
+          if [ -f /tmp/taj_last_state.json ]; then cp /tmp/taj_last_state.json taj_last_state.json; fi
 
           python - <<'PY'
           from copy import copy
@@ -265,24 +297,16 @@ jobs:
               else:
                   print("Latest Taj row already exists; no duplicate added.")
           else:
-              try:
-                  should_append = new_ts > old_ts
-              except TypeError:
-                  should_append = str(new_ts) > str(old_ts)
-
-              if should_append:
-                  target_row = base_last + 1
-                  ws.append(list(latest_row))
-                  for col in range(1, len(latest_row) + 1):
-                      source = ws.cell(base_last, col)
-                      target = ws.cell(target_row, col)
-                      if source.has_style:
-                          target._style = copy(source._style)
-                      if source.number_format:
-                          target.number_format = source.number_format
-                  print("Merged the latest Taj row into current main history.")
-              else:
-                  print("Current run is older than main; keeping main history unchanged.")
+              target_row = base_last + 1
+              ws.append(list(latest_row))
+              for col in range(1, len(latest_row) + 1):
+                  source = ws.cell(base_last, col)
+                  target = ws.cell(target_row, col)
+                  if source.has_style:
+                      target._style = copy(source._style)
+                  if source.number_format:
+                      target.number_format = source.number_format
+              print("Merged the fresh Taj row into current main history.")
 
           base.save("Taj_Price_History.xlsx")
           PY
@@ -298,7 +322,7 @@ jobs:
                   writer.writerow(row)
           PY
 
-          git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
+          git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated taj_last_state.json
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
           git push origin HEAD:main
