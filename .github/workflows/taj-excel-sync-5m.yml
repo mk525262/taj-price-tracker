@@ -165,14 +165,14 @@ jobs:
       - name: Queue next Taj check in 5 minutes
         if: always()
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           now=$(date +%s)
           elapsed=$((now - CADENCE_START))
           remaining=$((300 - elapsed))
 
           if [ "$remaining" -gt 0 ]; then
-            echo "Waiting $remainings to preserve a 5-minute cadence..."
+            echo "Waiting ${remaining}s to preserve a 5-minute cadence..."
             sleep "$remaining"
           fi
 
