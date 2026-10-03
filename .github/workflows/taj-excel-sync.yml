@@ -7,8 +7,8 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
   schedule:
-    # Run every 5 minutes in India time.
-    - cron: "*/5 * * * *"
+    # Run every 5 minutes in India time, offset from the top of the hour.
+    - cron: "1-59/5 * * * *"
       timezone: "Asia/Kolkata"
 
 permissions:
