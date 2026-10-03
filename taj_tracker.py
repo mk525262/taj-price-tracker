@@ -4,6 +4,7 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
+import os
 from openpyxl import Workbook, load_workbook
 
 URL = "https://www.tajhotels.com/en-in/bookings/landing-page?hotelId=d21c3bf6-f508-47ae-a456-540429b02b0d"
@@ -35,7 +36,7 @@ def create_browser(p):
     print("Fresh browser open kar raha hoon...")
 
     browser = p.chromium.launch(
-        headless=False,
+        headless=True,
         args=["--deny-permission-prompts"]
     )
 
