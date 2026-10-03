@@ -7,8 +7,8 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
   schedule:
-    # Run every 30 minutes in India time.
-    - cron: "*/30 * * * *"
+    # Run every 5 minutes in India time.
+    - cron: "*/5 * * * *"
       timezone: "Asia/Kolkata"
 
 permissions:
@@ -194,7 +194,7 @@ jobs:
               send(message, 5)
 
           # Priority 3: exactly one normal scheduled message at 09:00, 13:00,
-          # 17:00 and 21:00 India time. The workflow runs every 30 minutes;
+          # 17:00 and 21:00 India time. The workflow runs every 5 minutes;
           # these four hours occur at minute 00 in IST.
           now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
           scheduled_hours = {9, 13, 17, 21}
