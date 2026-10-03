@@ -85,6 +85,20 @@ jobs:
           print("Latest Taj price synced to Google Sheet.")
           PY
 
+      - name: TEST Telegram message
+        env:
+          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, urllib.parse, urllib.request
+          message = "🧪 TAJ TEST MESSAGE\\n\\n🏨 Taj City Centre Gurugram\\n📅 25 Dec 2026 → 26 Dec 2026\\n💰 Test alert — Telegram connection is working.\\n🕐 This is only a test."
+          token = os.environ["TAJ_TELEGRAM_BOT_TOKEN"].strip()
+          data = urllib.parse.urlencode({"chat_id":"348797661","text":message}).encode("utf-8")
+          req = urllib.request.Request("https://api.telegram.org/bot"+token+"/sendMessage", data=data, method="POST")
+          urllib.request.urlopen(req, timeout=20).read()
+          print("Test Telegram message sent.")
+          PY
+
       - name: Send scheduled and price-change Telegram alerts
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
