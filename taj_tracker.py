@@ -1275,7 +1275,7 @@ def check_price(p):
         print(telegram_message)
 
         save_price_history(results, lowest, lowest_room, lowest_type)
-        send_telegram(telegram_message)
+        # Telegram delivery is handled centrally by GitHub Actions.
 
         return lowest
 
