@@ -85,17 +85,14 @@ jobs:
           print("Latest Taj price synced to Google Sheet.")
           PY
 
-      - name: Send scheduled and price-change Telegram alerts
+      - name: Send current Taj price to Telegram every 5 minutes
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
           python - <<'PY'
           import os
-          import json
-          import time
           import urllib.parse
           import urllib.request
-          from datetime import datetime, timezone, timedelta
           from openpyxl import load_workbook
 
           path = "Taj_Price_History.xlsx"
@@ -109,35 +106,12 @@ jobs:
 
           current = rows[-1]
 
-          # Alert comparisons use persistent state instead of the last Excel row,
-          # because the historical workbook contains older out-of-order test rows.
-          state_path = "taj_last_state.json"
-          previous = None
-          try:
-              with open(state_path, "r", encoding="utf-8") as f:
-                  previous = json.load(f)
-          except (FileNotFoundError, json.JSONDecodeError):
-              previous = None
-
           token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
           if not token:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
           chat_id = "348797661"
           url = "https://api.telegram.org/bot" + token + "/sendMessage"
-
-          def send(message, count):
-              for i in range(count):
-                  data = urllib.parse.urlencode({
-                      "chat_id": chat_id,
-                      "text": message
-                  }).encode("utf-8")
-                  req = urllib.request.Request(url, data=data, method="POST")
-                  with urllib.request.urlopen(req, timeout=20) as response:
-                      response.read()
-                  print(f"Telegram message {i + 1}/{count} sent.")
-                  if i < count - 1:
-                      time.sleep(1)
 
           lowest = int(float(current[5]))
           labels = [
@@ -147,84 +121,30 @@ jobs:
               ("🛏 King Standard", current[4]),
           ]
 
-          changed = False
-          crossed_8000 = False
-          if previous is not None:
-              previous_rates = (
-                  previous.get("twinMember"),
-                  previous.get("twinStandard"),
-                  previous.get("kingMember"),
-                  previous.get("kingStandard"),
-              )
-              changed = previous_rates != tuple(current[1:5])
-              try:
-                  crossed_8000 = (
-                      float(previous.get("lowestPrice")) >= 8000
-                      and float(current[5]) < 8000
-                  )
-              except (TypeError, ValueError):
-                  crossed_8000 = False
+          message = (
+              "💰 TAJ PRICE UPDATE\n\n"
+              f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
+              "🏨 Taj City Centre Gurugram\n"
+              "📅 25 Dec 2026 → 26 Dec 2026\n"
+              "👤 1 Guest | 1 Room\n\n"
+          )
 
-          # Priority 1: crossing from >= ₹8,000 to < ₹8,000 -> 20 messages.
-          if crossed_8000:
-              message = (
-                  "🚨🚨 TAJ ₹8,000 CROSS ALERT 🚨🚨\n\n"
-                  "🏨 Taj City Centre Gurugram\n"
-                  "📅 25 Dec 2026 → 26 Dec 2026\n"
-                  "👤 1 Guest | 1 Room\n\n"
-                  f"💰 LOWEST PRICE: ₹{lowest:,}\n"
-                  "🔥 PRICE CROSSED BELOW ₹8,000!\n"
-                  f"🕐 {current[0]}"
-              )
-              send(message, 20)
+          for label, value in labels:
+              if value is not None:
+                  message += f"{label}: ₹{int(float(value)):,}\n"
 
-          # Priority 2: any price change up or down -> 5 messages.
-          elif changed:
-              message = (
-                  "🚨 TAJ PRICE CHANGE\n\n"
-                  f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
-                  "🏨 Taj City Centre Gurugram\n"
-                  "📅 25 Dec 2026 → 26 Dec 2026\n"
-                  "👤 1 Guest | 1 Room\n\n"
-              )
-              for label, value in labels:
-                  if value is not None:
-                      message += f"{label}: ₹{int(float(value)):,}\n"
-              message += f"🕐 {current[0]}"
-              send(message, 5)
+          message += f"🕐 {current[0]}"
 
-          # Priority 3: exactly one normal scheduled message at 09:00, 13:00,
-          # 17:00 and 21:00 India time. The workflow runs every 5 minutes;
-          # these four hours occur at minute 00 in IST.
-          now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-          scheduled_hours = {9, 13, 17, 21}
-          if (not crossed_8000) and (not changed) and now_ist.hour in scheduled_hours and now_ist.minute == 0:
-              message = (
-                  "💰 TAJ PRICE UPDATE\n\n"
-                  f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
-                  "🏨 Taj City Centre Gurugram\n"
-                  "📅 25 Dec 2026 → 26 Dec 2026\n"
-                  "👤 1 Guest | 1 Room\n\n"
-              )
-              for label, value in labels:
-                  if value is not None:
-                      message += f"{label}: ₹{int(float(value)):,}\n"
-              message += f"🕐 {current[0]}"
-              send(message, 1)
+          data = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message
+          }).encode("utf-8")
 
-          with open(state_path, "w", encoding="utf-8") as f:
-              json.dump({
-                  "timestamp": current[0],
-                  "twinMember": current[1],
-                  "twinStandard": current[2],
-                  "kingMember": current[3],
-                  "kingStandard": current[4],
-                  "lowestPrice": current[5],
-                  "lowestRoom": current[6],
-                  "lowestRateType": current[7],
-              }, f, ensure_ascii=False, indent=2)
+          req = urllib.request.Request(url, data=data, method="POST")
+          with urllib.request.urlopen(req, timeout=20) as response:
+              response.read()
 
-          print("Telegram alert processing complete.")
+          print("Current real Taj price message sent to Telegram.")
           PY
 
       - name: Export Taj Excel history to CSV
