@@ -6,11 +6,8 @@ on:
     paths:
       - ".github/workflows/taj-excel-sync.yml"
   schedule:
-    # Price check every 30 minutes at :30 UTC.
-    - cron: "30 * * * *"
-    # Exactly four scheduled Telegram updates in India time.
-    - cron: "0 9,13,17,21 * * *"
-      timezone: "Asia/Kolkata"
+    # Run every 30 minutes. GitHub's schedule is UTC by default.
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: write
@@ -89,7 +86,6 @@ jobs:
       - name: Send scheduled and price-change Telegram alerts
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
-          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           python - <<'PY'
           import os
@@ -179,14 +175,9 @@ jobs:
           # Priority 3: exactly one normal scheduled message at 09:00, 13:00,
           # 17:00 and 21:00 India time. The workflow runs every 30 minutes;
           # these four hours occur at minute 00 in IST.
-          # The exact scheduled runs are identified by GitHub's schedule event,
-          # so a delayed runner cannot accidentally create a second/missed
-          # "minute == 0" decision.
-          scheduled_event = os.environ.get("GITHUB_EVENT_SCHEDULE", "")
-          scheduled_crons = {
-              "0 9,13,17,21 * * *",
-          }
-          if scheduled_event in scheduled_crons:
+          now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+          scheduled_hours = {9, 13, 17, 21}
+          if now_ist.hour in scheduled_hours and now_ist.minute == 0:
               message = (
                   "💰 TAJ PRICE UPDATE\n\n"
                   f"💰 LOWEST PRICE: ₹{lowest:,}\n\n"
