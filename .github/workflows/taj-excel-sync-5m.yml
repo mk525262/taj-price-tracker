@@ -44,6 +44,7 @@ jobs:
         run: python taj_timezone_migration.py
 
       - name: Sync latest Taj price to Google Sheet
+        if: ${{ success() }}
         run: |
           python - <<'PY'
           import json
@@ -85,6 +86,7 @@ jobs:
           PY
 
       - name: Apply old Taj Telegram alert rules
+        if: always()
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
@@ -169,6 +171,8 @@ jobs:
                       message += f"{label}: ₹{int(float(value)):,}\n"
               message += f"🕐 {current[0]}"
           elif timed_update:
+              # Timed updates must be sent even when the fresh Taj check failed.
+              # In that case, use the latest successfully saved price from history.
               alert_count = 1
               message = (
                   "💰 TAJ PRICE UPDATE\n\n"
