@@ -344,7 +344,11 @@ jobs:
           git reset --hard origin/main
           if [ -f /tmp/taj_last_state.json ]; then cp /tmp/taj_last_state.json taj_last_state.json; fi
           if [ -f /tmp/taj_telegram_state.json ]; then cp /tmp/taj_telegram_state.json taj_telegram_state.json; fi
-          if [ -f /tmp/taj_telegram_pending.json ]; then cp /tmp/taj_telegram_pending.json taj_telegram_pending.json; fi
+          if [ -f /tmp/taj_telegram_pending.json ]; then
+            cp /tmp/taj_telegram_pending.json taj_telegram_pending.json
+          else
+            rm -f taj_telegram_pending.json
+          fi
 
           python - <<'PY'
           from copy import copy
