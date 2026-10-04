@@ -3,6 +3,9 @@ name: Taj Excel History Sync 5m
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "taj_tracker.py"
   repository_dispatch:
     types: [taj_5m]
 
