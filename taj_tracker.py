@@ -45,7 +45,8 @@ def create_browser(p):
             "width": 1400,
             "height": 900
         },
-        permissions=[]
+        permissions=[],
+        service_workers="block"
     )
 
     context.add_init_script("""
@@ -70,6 +71,19 @@ def create_browser(p):
     """)
 
     page = context.new_page()
+
+    try:
+        page.set_extra_http_headers({
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache"
+        })
+        cdp = context.new_cdp_session(page)
+        cdp.send("Network.enable")
+        cdp.send("Network.setCacheDisabled", {"cacheDisabled": True})
+        cdp.send("Network.clearBrowserCache")
+        print("Chromium cache disabled for this Taj check.")
+    except Exception as e:
+        print("Could not disable Chromium cache:", e)
 
     return browser, context, page
 
@@ -1307,9 +1321,49 @@ def check_price(p):
 
         browser, context, page = create_browser(p)
 
-        results = extract_api_rates(
-            get_taj_api_response(page, context)
+        # Taj's rendered booking UI is the source of truth.
+        # The network API remains a diagnostic/fallback only.
+        api_data = None
+        try:
+            api_data = get_taj_api_response(page, context)
+        except Exception as e:
+            print("Taj availability API capture warning:", e)
+
+        page.wait_for_timeout(5000)
+
+        rendered_results = {}
+        twin_rendered = extract_room_rates(
+            page, "SUPERIOR ROOM TWIN BED"
         )
+        if twin_rendered:
+            rendered_results["SUPERIOR ROOM TWIN BED"] = twin_rendered
+
+        scroll_to_king(page)
+
+        king_rendered = extract_room_rates(
+            page, "SUPERIOR ROOM KING BED"
+        )
+        if king_rendered:
+            rendered_results["SUPERIOR ROOM KING BED"] = king_rendered
+
+        if rendered_results:
+            results = {
+                "SUPERIOR ROOM TWIN BED": rendered_results.get(
+                    "SUPERIOR ROOM TWIN BED", {}
+                ),
+                "SUPERIOR ROOM KING BED": rendered_results.get(
+                    "SUPERIOR ROOM KING BED", {}
+                ),
+            }
+            print("PRICE SOURCE: LIVE TAJ RENDERED BOOKING UI")
+        elif api_data is not None:
+            results = extract_api_rates(api_data)
+            print("PRICE SOURCE: TAJ BROWSER API FALLBACK")
+        else:
+            raise RuntimeError(
+                "Taj live room prices could not be read from the booking UI "
+                "and no API response was available."
+            )
 
         valid_prices = []
         for room_name, data in results.items():
