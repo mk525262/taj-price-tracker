@@ -223,6 +223,7 @@ jobs:
           # Save the row produced by this run before refreshing from the latest main.
           cp Taj_Price_History.xlsx /tmp/Taj_Price_History.latest.xlsx
           if [ -f taj_last_state.json ]; then cp taj_last_state.json /tmp/taj_last_state.json; fi
+          if [ -f taj_telegram_state.json ]; then cp taj_telegram_state.json /tmp/taj_telegram_state.json; fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -233,6 +234,7 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
           if [ -f /tmp/taj_last_state.json ]; then cp /tmp/taj_last_state.json taj_last_state.json; fi
+          if [ -f /tmp/taj_telegram_state.json ]; then cp /tmp/taj_telegram_state.json taj_telegram_state.json; fi
 
           python - <<'PY'
           from copy import copy
@@ -297,6 +299,7 @@ jobs:
 
           git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
           if [ -f taj_last_state.json ]; then git add taj_last_state.json; fi
+          if [ -f taj_telegram_state.json ]; then git add taj_telegram_state.json; fi
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
           git push origin HEAD:main
