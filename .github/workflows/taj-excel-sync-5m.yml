@@ -410,7 +410,11 @@ jobs:
           git add Taj_Price_History.xlsx Taj_Price_History.csv .taj_timestamps_ist_migrated
           if [ -f taj_last_state.json ]; then git add taj_last_state.json; fi
           if [ -f taj_telegram_state.json ]; then git add taj_telegram_state.json; fi
-          if [ -f taj_telegram_pending.json ]; then git add taj_telegram_pending.json; fi
+          if [ -f taj_telegram_pending.json ]; then
+            git add taj_telegram_pending.json
+          else
+            git rm --cached --ignore-unmatch taj_telegram_pending.json || true
+          fi
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
           git push origin HEAD:main
