@@ -1457,3 +1457,5 @@ with sync_playwright() as p:
     except Exception as e:
         print("\nCLOUD CHECK ERROR:", e)
         raise
+
+# Live Taj UI price source: verified on 2026-10-04.
