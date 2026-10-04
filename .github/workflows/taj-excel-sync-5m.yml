@@ -121,6 +121,40 @@ jobs:
           if not token:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
+          # Retry any alert left pending by a previous failed Telegram delivery.
+          # This makes a transient Telegram/API failure recoverable on the next run.
+          PENDING_PATH = Path("taj_telegram_pending.json")
+          STATE_PATH = Path("taj_telegram_state.json")
+          if PENDING_PATH.exists():
+              pending = json.loads(PENDING_PATH.read_text(encoding="utf-8"))
+              pending_messages = pending.get("messages", [])
+              if pending_messages:
+                  print(f"Retrying {len(pending_messages)} pending Telegram alert batch(es).")
+                  url = "https://api.telegram.org/bot" + token + "/sendMessage"
+                  for item in pending_messages:
+                      for i in range(int(item["count"])):
+                          data = urllib.parse.urlencode({
+                              "chat_id": "348797661",
+                              "text": item["message"],
+                          }).encode("utf-8")
+                          req = urllib.request.Request(url, data=data, method="POST")
+                          with urllib.request.urlopen(req, timeout=20) as response:
+                              response.read()
+                          print(f"Telegram retry {item['kind']} {i + 1}/{item['count']} sent.")
+                          if i < int(item["count"]) - 1:
+                              time.sleep(1)
+
+                  pending_slot = pending.get("timed_slot")
+                  if pending_slot:
+                      state = json.loads(STATE_PATH.read_text(encoding="utf-8")) if STATE_PATH.exists() else {}
+                      state["last_timed_slot"] = pending_slot
+                      STATE_PATH.write_text(
+                          json.dumps(state, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8",
+                      )
+                  PENDING_PATH.unlink()
+                  print("Pending Telegram alert delivered successfully.")
+
           # NORMAL UPDATE: exactly one message for each of 09:00, 13:00, 17:00,
           # 21:00 IST. If a run is missed, recover it for 30 minutes, once only.
           now_ist = dt.datetime.now(dt.timezone.utc).astimezone(
@@ -214,7 +248,10 @@ jobs:
           # commit step saves it to main; if Telegram fails, the next run retries.
           PENDING_PATH = Path("taj_telegram_pending.json")
           PENDING_PATH.write_text(
-              json.dumps({"messages": messages}, indent=2, ensure_ascii=False) + "\n",
+              json.dumps({
+                  "timed_slot": timed_slot if timed_due else None,
+                  "messages": messages,
+              }, indent=2, ensure_ascii=False) + "\n",
               encoding="utf-8",
           )
 
