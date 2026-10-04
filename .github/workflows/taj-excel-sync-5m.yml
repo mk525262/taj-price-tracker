@@ -118,15 +118,26 @@ jobs:
           previous_prices = tuple(previous[1:5]) if previous else current_prices
           changed = previous is not None and current_prices != previous_prices
 
-          # Scheduled check runs every 5 minutes; normal timed updates are sent
-          # once at 09:00, 13:00, 17:00 and 21:00 IST.
+          # Normal timed updates are scheduled for 09:00, 13:00, 17:00 and
+          # 21:00 IST. Recover a missed slot for 30 minutes and persist the
+          # successful slot so it is sent only once.
           now_ist = dt.datetime.now(dt.timezone.utc).astimezone(
               dt.timezone(dt.timedelta(hours=5, minutes=30))
           )
-          timed_update = (
-              now_ist.hour in (9, 13, 17, 21)
-              and now_ist.minute < 5
-          )
+          import json
+          from pathlib import Path
+          scheduled_hours = (9, 13, 17, 21)
+          timed_slot = None
+          for hour in scheduled_hours:
+              if now_ist.hour == hour and now_ist.minute < 30:
+                  timed_slot = now_ist.strftime("%Y-%m-%d") + f"-{hour:02d}"
+                  break
+          state_path = Path("taj_telegram_state.json")
+          try:
+              state = json.loads(state_path.read_text(encoding="utf-8"))
+          except (FileNotFoundError, json.JSONDecodeError):
+              state = {}
+          timed_update = timed_slot is not None and timed_slot != state.get("last_timed_slot")
 
           previous_lowest = float(previous[5]) if previous and previous[5] is not None else None
           current_lowest = float(current[5])
@@ -140,6 +151,7 @@ jobs:
           )
 
           alert_count = 0
+          timed_alert_to_mark = None
           if crossed_8000:
               alert_count = 20
               message = (
@@ -171,9 +183,10 @@ jobs:
                       message += f"{label}: ₹{int(float(value)):,}\n"
               message += f"🕐 {current[0]}"
           elif timed_update:
-              # Timed updates must be sent even when the fresh Taj check failed.
-              # In that case, use the latest successfully saved price from history.
+              # A missed scheduled run is recovered by the next successful run
+              # within the 30-minute window, using saved price history.
               alert_count = 1
+              timed_alert_to_mark = timed_slot
               message = (
                   "💰 TAJ PRICE UPDATE\n\n"
                   f"💰 LOWEST PRICE: ₹{int(current_lowest):,}\n\n"
@@ -207,6 +220,14 @@ jobs:
               print(f"Telegram alert {i + 1}/{alert_count} sent.")
               if i < alert_count - 1:
                   time.sleep(1)
+
+          if timed_alert_to_mark:
+              state["last_timed_slot"] = timed_alert_to_mark
+              state_path.write_text(
+                  json.dumps(state, indent=2, ensure_ascii=False) + "\n",
+                  encoding="utf-8",
+              )
+              print(f"Recorded successful timed Telegram slot: {timed_alert_to_mark}")
           PY
 
       - name: Export Taj Excel history to CSV
