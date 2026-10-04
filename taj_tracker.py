@@ -1092,7 +1092,13 @@ def rate_is_100pct_nonrefundable(rate):
 
 
 def get_taj_api_response(page, context):
-    captured = {"headers": None, "url": None, "body": None}
+    captured = {
+        "headers": None,
+        "url": None,
+        "body": None,
+        "response_body": None,
+        "response_status": None,
+    }
     api_requests = []
 
     def capture_request(req):
@@ -1104,7 +1110,23 @@ def get_taj_api_response(page, context):
                 captured["url"] = req.url
                 captured["body"] = req.post_data
 
+    def capture_response(response):
+        if (
+            TAJ_API_HOST in response.url
+            and TAJ_API_PATH in response.url
+            and response.request.method == "POST"
+            and captured["response_body"] is None
+        ):
+            try:
+                captured["response_status"] = response.status
+                captured["response_body"] = response.text()
+                print("Taj browser API response captured directly.")
+                print("Taj browser API HTTP:", response.status)
+            except Exception as e:
+                print("Could not read Taj browser API response:", e)
+
     page.on("request", capture_request)
+    page.on("response", capture_response)
 
     # Loading the normal Taj page makes Taj itself issue a legitimate API
     # request, establishing the browser cookies/session and giving us the exact
@@ -1157,6 +1179,29 @@ def get_taj_api_response(page, context):
 
     print("Taj browser API request captured.")
     print("Original API URL:", captured["url"])
+
+    # Prefer the exact response returned to the real Taj webpage. This avoids
+    # replaying the same payload through a second API call that can return a
+    # cached/stale availability snapshot.
+    if captured["response_body"] is not None:
+        status = captured["response_status"]
+        if status != 200:
+            raise RuntimeError(
+                "Taj browser availability API returned HTTP "
+                + str(status) + ": " + captured["response_body"][:1000]
+            )
+
+        data = json.loads(captured["response_body"])
+
+        Path("taj_last_api_response.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+        print("Using the exact fresh API response received by the Taj browser page.")
+        return data
+
+    print("Browser response body was not available; falling back to a replay of the captured request.")
 
     headers = dict(captured["headers"])
     for key in list(headers):
