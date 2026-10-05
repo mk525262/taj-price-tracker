@@ -1267,20 +1267,29 @@ def get_taj_api_response(page, context):
             print("Visible booking controls:", visible[:40])
         except Exception:
             pass
-        raise RuntimeError(
-            "Taj fresh availability response nahi mili after explicit date selection."
+
+        # Do NOT fail the whole 5-minute price check just because Taj did not
+        # emit its availability POST. The rendered booking UI is itself a
+        # fresh source in this new cache-disabled browser session. The price
+        # extraction below still requires BOTH target room cards and BOTH
+        # Member/Standard rates before anything is saved.
+        print(
+            "WARNING: Taj exact availability API response nahi mila. "
+            "Rendered booking UI ko fresh price source ke roop mein verify karenge."
         )
+        return None
 
     print("Taj fresh browser availability response captured.")
     print("Fresh API URL:", captured["url"])
     print("Fresh API request payload:", captured["body"])
 
     if captured["response_status"] != 200:
-        raise RuntimeError(
-            "Taj browser availability API returned HTTP "
-            + str(captured["response_status"]) + ": "
-            + (captured["response_body"] or "")[:1000]
+        print(
+            "WARNING: Taj browser availability API returned HTTP "
+            + str(captured["response_status"])
+            + "; rendered UI verification continue karenge."
         )
+        return None
 
     data = json.loads(captured["response_body"])
     Path("taj_last_api_response.json").write_text(
@@ -1288,7 +1297,7 @@ def get_taj_api_response(page, context):
         encoding="utf-8"
     )
 
-    print("Using ONLY the fresh Taj browser response generated after explicit date selection.")
+    print("Fresh Taj browser availability response captured for verification.")
     return data
 
 
