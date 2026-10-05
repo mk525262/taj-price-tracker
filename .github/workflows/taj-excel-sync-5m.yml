@@ -159,6 +159,8 @@ jobs:
               print("Not enough history rows for Telegram.")
               raise SystemExit(0)
 
+          FRESH_VERIFIED = Path(".taj_verified_price.json").exists()
+
           current = rows[-1]
           previous = rows[-2] if len(rows) >= 3 else None
           current_prices = tuple(current[1:5])
@@ -169,7 +171,6 @@ jobs:
           previous_lowest = float(previous[5]) if previous and previous[5] is not None else None
 
           token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
-          FRESH_VERIFIED = Path(".taj_verified_price.json").exists()
           if not token:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
