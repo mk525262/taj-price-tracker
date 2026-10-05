@@ -48,6 +48,7 @@ jobs:
         run: python taj_timezone_migration.py
 
       - name: Verify fresh Taj history row
+        continue-on-error: true
         run: |
           python - <<'PY'
           from datetime import datetime, timedelta, timezone
@@ -94,7 +95,7 @@ jobs:
           PY
 
       - name: Sync latest Taj price to Google Sheet
-        if: ${{ success() }}
+        if: ${{ steps.taj_check.outcome == 'success' && hashFiles('.taj_verified_price.json') != '' }}
         run: |
           python - <<'PY'
           import json
@@ -136,7 +137,7 @@ jobs:
           PY
 
       - name: Apply Taj Telegram alert rules
-        if: ${{ steps.taj_check.outcome == 'success' && hashFiles('.taj_verified_price.json') != '' }}
+        if: ${{ always() }}
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
@@ -162,12 +163,13 @@ jobs:
           previous = rows[-2] if len(rows) >= 3 else None
           current_prices = tuple(current[1:5])
           previous_prices = tuple(previous[1:5]) if previous else current_prices
-          changed = previous is not None and current_prices != previous_prices
+          changed = FRESH_VERIFIED and previous is not None and current_prices != previous_prices
 
           current_lowest = float(current[5])
           previous_lowest = float(previous[5]) if previous and previous[5] is not None else None
 
           token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
+          FRESH_VERIFIED = Path(".taj_verified_price.json").exists()
           if not token:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
@@ -229,13 +231,15 @@ jobs:
 
           # SPECIAL: crossing from >= ₹8,000 to < ₹8,000 sends 20 messages.
           crossed_8000 = (
-              previous_lowest is not None
+              FRESH_VERIFIED
+              and previous_lowest is not None
               and previous_lowest >= 8000
               and current_lowest < 8000
           )
 
+          normal_prefix = "💰 TAJ PRICE UPDATE" if FRESH_VERIFIED else "💰 TAJ LAST VERIFIED PRICE"
           normal_message = (
-              "💰 TAJ PRICE UPDATE\n\n"
+              normal_prefix + "\n\n"
               f"💰 LOWEST PRICE: ₹{int(current_lowest):,}\n\n"
               "🏨 Taj City Centre Gurugram\n"
               "📅 25 Dec 2026 → 26 Dec 2026\n"
@@ -249,6 +253,8 @@ jobs:
           ]:
               if value is not None:
                   normal_message += f"{label}: ₹{int(float(value)):,}\n"
+          if not FRESH_VERIFIED:
+              normal_message += "⚠️ Fresh Taj check unavailable in this run.\n"
           normal_message += f"🕐 {current[0]}"
 
           change_message = (
@@ -280,6 +286,9 @@ jobs:
 
           messages = []
           # The scheduled 4/day update is independent of price-change alerts.
+          # If Taj verification failed, send the latest saved VERIFIED price,
+          # explicitly labeled as last verified. Never create change/threshold
+          # alerts from stale data.
           if timed_due:
               messages.append((normal_message, 1, "scheduled"))
 
