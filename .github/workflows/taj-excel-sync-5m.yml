@@ -47,6 +47,52 @@ jobs:
       - name: Convert Taj timestamps to India time
         run: python taj_timezone_migration.py
 
+      - name: Verify fresh Taj history row
+        run: |
+          python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          from openpyxl import load_workbook
+
+          excel = Path("Taj_Price_History.xlsx")
+          marker = Path(".taj_verified_price.json")
+          marker.unlink(missing_ok=True)
+
+          wb = load_workbook(excel, read_only=True, data_only=True)
+          ws = wb.active
+          if ws.max_row < 2:
+              raise SystemExit("No saved Taj price row found.")
+
+          row = list(ws.iter_rows(values_only=True))[-1]
+          timestamp = row[0]
+          if not timestamp:
+              raise SystemExit("Latest Taj price row has no timestamp.")
+
+          if isinstance(timestamp, datetime):
+              ts = timestamp.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+          else:
+              ts = datetime.strptime(str(timestamp).strip(), "%Y-%m-%d %H:%M:%S").replace(
+                  tzinfo=timezone(timedelta(hours=5, minutes=30))
+              )
+
+          now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+          age = (now - ts).total_seconds()
+
+          if age < -120 or age > 600:
+              raise SystemExit(
+                  f"Latest Taj history row is not fresh: timestamp={timestamp}, age_seconds={age:.0f}"
+              )
+
+          if any(row[i] is None for i in range(1, 5)):
+              raise SystemExit("Latest Taj history row is incomplete; refusing Telegram alerts.")
+
+          marker.write_text(
+              "verified fresh Taj price row\\n",
+              encoding="utf-8",
+          )
+          print(f"Fresh Taj price row verified: {timestamp}; age={age:.0f}s")
+          PY
+
       - name: Sync latest Taj price to Google Sheet
         if: ${{ success() }}
         run: |
@@ -90,7 +136,7 @@ jobs:
           PY
 
       - name: Apply Taj Telegram alert rules
-        if: ${{ steps.taj_check.outcome == 'success' }}
+        if: ${{ steps.taj_check.outcome == 'success' && hashFiles('.taj_verified_price.json') != '' }}
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
