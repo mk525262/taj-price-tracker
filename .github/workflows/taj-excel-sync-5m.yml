@@ -192,7 +192,7 @@ jobs:
           def send_pending_batch(pending_obj, label):
               url = "https://api.telegram.org/bot" + token + "/sendMessage"
               items = pending_obj.get("messages", [])
-              for item in items:
+              for item_index, item in enumerate(items):
                   # Backward-compatible with the old list/tuple representation.
                   if isinstance(item, list):
                       item = {
@@ -201,6 +201,7 @@ jobs:
                           "kind": item[2],
                           "sent": 0,
                       }
+                      items[item_index] = item
                   item.setdefault("sent", 0)
                   count = int(item["count"])
                   for index in range(int(item["sent"]), count):
