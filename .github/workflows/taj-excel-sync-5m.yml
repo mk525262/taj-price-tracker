@@ -40,110 +40,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
 
-      # Scheduled Telegram heartbeat is deliberately BEFORE the Taj browser check.
-      # This guarantees the 09:00/13:00/17:00/21:00 message is not blocked by a
-      # slow/hung Taj site. It uses the latest saved price and explicitly labels
-      # it as LAST VERIFIED; price-change/special alerts remain gated on fresh data.
-      - name: Send scheduled Taj Telegram update early
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        env:
-          TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
-        run: |
-          python - <<'PY'
-          import datetime as dt
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
-          from pathlib import Path
-          from openpyxl import load_workbook
-
-          now_ist = dt.datetime.now(dt.timezone.utc).astimezone(
-              dt.timezone(dt.timedelta(hours=5, minutes=30))
-          )
-          timed_slot = None
-          for hour in (9, 13, 17, 21):
-              if now_ist.hour == hour and now_ist.minute < 30:
-                  timed_slot = now_ist.strftime("%Y-%m-%d") + f"-{hour:02d}"
-                  break
-
-          if timed_slot is None:
-              print("No scheduled Telegram slot in the current 30-minute recovery window.")
-              raise SystemExit(0)
-
-          state_path = Path("taj_telegram_state.json")
-          try:
-              state = json.loads(state_path.read_text(encoding="utf-8"))
-          except (FileNotFoundError, json.JSONDecodeError):
-              state = {}
-
-          if timed_slot == state.get("last_timed_slot"):
-              print(f"Scheduled Telegram slot already delivered: {timed_slot}")
-              raise SystemExit(0)
-
-          pending_path = Path("taj_telegram_pending.json")
-          if pending_path.exists():
-              try:
-                  pending = json.loads(pending_path.read_text(encoding="utf-8"))
-              except json.JSONDecodeError:
-                  pending = {}
-              if pending.get("timed_slot") == timed_slot:
-                  print(f"Scheduled Telegram slot {timed_slot} already has a pending delivery; leaving it for retry.")
-                  raise SystemExit(0)
-
-          wb = load_workbook("Taj_Price_History.xlsx", read_only=True, data_only=True)
-          ws = wb.active
-          rows = list(ws.iter_rows(values_only=True))
-          if len(rows) < 2:
-              print("No saved Taj price history available for scheduled update.")
-              raise SystemExit(1)
-
-          current = rows[-1]
-          token = os.environ.get("TAJ_TELEGRAM_BOT_TOKEN", "").strip()
-          if not token:
-              raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
-
-          message = (
-              "💰 TAJ LAST VERIFIED PRICE\n\n"
-              f"💰 LOWEST PRICE: ₹{int(float(current[5])):,}\n\n"
-              "🏨 Taj City Centre Gurugram\n"
-              "📅 25 Dec 2026 → 26 Dec 2026\n"
-              "👤 1 Guest | 1 Room\n\n"
-          )
-          for label, value in [
-              ("🛏 Twin Member", current[1]),
-              ("🛏 Twin Standard", current[2]),
-              ("🛏 King Member", current[3]),
-              ("🛏 King Standard", current[4]),
-          ]:
-              if value is not None:
-                  message += f"{label}: ₹{int(float(value)):,}\n"
-          message += (
-              "⚠️ Scheduled update uses the latest saved price; "
-              "fresh Taj verification is performed separately.\n"
-              f"🕐 {current[0]}"
-          )
-
-          url = "https://api.telegram.org/bot" + token + "/sendMessage"
-          data = urllib.parse.urlencode({
-              "chat_id": "348797661",
-              "text": message,
-          }).encode("utf-8")
-          req = urllib.request.Request(url, data=data, method="POST")
-          with urllib.request.urlopen(req, timeout=20) as response:
-              response.read()
-
-          state["last_timed_slot"] = timed_slot
-          tmp = state_path.with_suffix(".tmp")
-          tmp.write_text(
-              json.dumps(state, indent=2, ensure_ascii=False) + "\n",
-              encoding="utf-8",
-          )
-          tmp.replace(state_path)
-          print(f"Scheduled Telegram update sent successfully: {timed_slot}")
-          PY
-
+      # Scheduled Telegram messages are sent ONLY after this run has a
+      # freshly verified Taj price row. If the 17:00/09:00/etc check fails,
+      # later 5-minute runs have the full 30-minute recovery window to obtain
+      # a fresh price and send the scheduled message. Never send stale price
+      # data merely to satisfy the clock.
+      
       - name: Run Taj check for price history
         id: taj_check
         run: xvfb-run -a python taj_tracker.py
@@ -373,7 +275,7 @@ jobs:
               and current_lowest < 8000
           )
 
-          normal_prefix = "💰 TAJ PRICE UPDATE" if FRESH_VERIFIED else "💰 TAJ LAST VERIFIED PRICE"
+          normal_prefix = "💰 TAJ PRICE UPDATE"
           normal_message = (
               normal_prefix + "\n\n"
               f"💰 LOWEST PRICE: ₹{int(current_lowest):,}\n\n"
@@ -389,8 +291,6 @@ jobs:
           ]:
               if value is not None:
                   normal_message += f"{label}: ₹{int(float(value)):,}\n"
-          if not FRESH_VERIFIED:
-              normal_message += "⚠️ Fresh Taj check unavailable in this run.\n"
           normal_message += f"🕐 {current[0]}"
 
           change_message = (
@@ -421,12 +321,18 @@ jobs:
           )
 
           messages = []
-          # The scheduled 4/day update is independent of price-change alerts.
-          # If Taj verification failed, send the latest saved VERIFIED price,
-          # explicitly labeled as last verified. Never create change/threshold
-          # alerts from stale data.
-          if timed_due:
+          # The scheduled 4/day update is independent of price-change
+          # alerts, but it MUST use a fresh verified Taj row. If the Taj check
+          # failed on the exact slot, keep the slot eligible during the 30-minute
+          # recovery window and let a later successful 5-minute run deliver it.
+          # Never send a stale saved price as if it were the scheduled price.
+          if timed_due and FRESH_VERIFIED:
               messages.append((normal_message, 1, "scheduled"))
+          elif timed_due and not FRESH_VERIFIED:
+              print(
+                  f"Scheduled slot {timed_slot} is waiting for a fresh Taj verification; "
+                  "no stale-price Telegram message will be sent."
+              )
 
           # Price-change alert is independent of the scheduled update.
           # Crossing below ₹8,000 has priority over the normal 5-message change alert.
