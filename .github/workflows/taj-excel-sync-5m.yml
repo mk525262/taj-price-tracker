@@ -175,27 +175,57 @@ jobs:
               raise SystemExit("TAJ_TELEGRAM_BOT_TOKEN is not configured.")
 
           # Retry any alert left pending by a previous failed Telegram delivery.
-          # This makes a transient Telegram/API failure recoverable on the next run.
+          # Persist progress after EVERY successful send so a partial Telegram/API
+          # failure resumes from the next unsent message instead of duplicating
+          # messages that were already delivered.
           PENDING_PATH = Path("taj_telegram_pending.json")
           STATE_PATH = Path("taj_telegram_state.json")
+
+          def save_pending(pending_obj):
+              tmp = PENDING_PATH.with_suffix(".tmp")
+              tmp.write_text(
+                  json.dumps(pending_obj, indent=2, ensure_ascii=False) + "\n",
+                  encoding="utf-8",
+              )
+              tmp.replace(PENDING_PATH)
+
+          def send_pending_batch(pending_obj, label):
+              url = "https://api.telegram.org/bot" + token + "/sendMessage"
+              items = pending_obj.get("messages", [])
+              for item in items:
+                  # Backward-compatible with the old list/tuple representation.
+                  if isinstance(item, list):
+                      item = {
+                          "message": item[0],
+                          "count": int(item[1]),
+                          "kind": item[2],
+                          "sent": 0,
+                      }
+                  item.setdefault("sent", 0)
+                  count = int(item["count"])
+                  for index in range(int(item["sent"]), count):
+                      data = urllib.parse.urlencode({
+                          "chat_id": "348797661",
+                          "text": item["message"],
+                      }).encode("utf-8")
+                      req = urllib.request.Request(url, data=data, method="POST")
+                      with urllib.request.urlopen(req, timeout=20) as response:
+                          response.read()
+                      item["sent"] = index + 1
+                      save_pending(pending_obj)
+                      print(
+                          f"Telegram {label} {item['kind']} "
+                          f"{item['sent']}/{count} sent."
+                      )
+                      if item["sent"] < count:
+                          time.sleep(1)
+
           if PENDING_PATH.exists():
               pending = json.loads(PENDING_PATH.read_text(encoding="utf-8"))
               pending_messages = pending.get("messages", [])
               if pending_messages:
                   print(f"Retrying {len(pending_messages)} pending Telegram alert batch(es).")
-                  url = "https://api.telegram.org/bot" + token + "/sendMessage"
-                  for item in pending_messages:
-                      for i in range(int(item["count"])):
-                          data = urllib.parse.urlencode({
-                              "chat_id": "348797661",
-                              "text": item["message"],
-                          }).encode("utf-8")
-                          req = urllib.request.Request(url, data=data, method="POST")
-                          with urllib.request.urlopen(req, timeout=20) as response:
-                              response.read()
-                          print(f"Telegram retry {item['kind']} {i + 1}/{item['count']} sent.")
-                          if i < int(item["count"]) - 1:
-                              time.sleep(1)
+                  send_pending_batch(pending, "retry")
 
                   pending_slot = pending.get("timed_slot")
                   if pending_slot:
@@ -307,27 +337,23 @@ jobs:
           # Persist the alert as a pending queue before delivery. The final
           # commit step saves it to main; if Telegram fails, the next run retries.
           PENDING_PATH = Path("taj_telegram_pending.json")
-          PENDING_PATH.write_text(
-              json.dumps({
-                  "timed_slot": timed_slot if timed_due else None,
-                  "messages": messages,
-              }, indent=2, ensure_ascii=False) + "\n",
-              encoding="utf-8",
-          )
+          pending_obj = {
+              "timed_slot": timed_slot if timed_due else None,
+              "messages": [
+                  {
+                      "message": message,
+                      "count": int(count),
+                      "kind": kind,
+                      "sent": 0,
+                  }
+                  for message, count, kind in messages
+              ],
+          }
+          save_pending(pending_obj)
 
-          url = "https://api.telegram.org/bot" + token + "/sendMessage"
-          for message, count, kind in messages:
-              for i in range(count):
-                  data = urllib.parse.urlencode({
-                      "chat_id": "348797661",
-                      "text": message,
-                  }).encode("utf-8")
-                  req = urllib.request.Request(url, data=data, method="POST")
-                  with urllib.request.urlopen(req, timeout=20) as response:
-                      response.read()
-                  print(f"Telegram {kind} alert {i + 1}/{count} sent.")
-                  if i < count - 1:
-                      time.sleep(1)
+          # Send with durable per-message progress. If Telegram fails halfway,
+          # the next 5-minute run resumes from the first unsent message.
+          send_pending_batch(pending_obj, "new")
 
           if timed_due:
               state["last_timed_slot"] = timed_slot
@@ -481,4 +507,15 @@ jobs:
           fi
           git diff --cached --quiet && exit 0
           git commit -m "Update Taj price history"
-          git push origin HEAD:main
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "Git push succeeded on attempt $attempt."
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Git push failed after 3 attempts."
+              exit 1
+            fi
+            echo "Git push failed on attempt $attempt; retrying in 10s..."
+            sleep 10
+          done
