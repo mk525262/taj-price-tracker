@@ -41,6 +41,7 @@ jobs:
           sudo apt-get install -y xvfb
 
       - name: Run Taj check for price history
+        id: taj_check
         run: xvfb-run -a python taj_tracker.py
 
       - name: Convert Taj timestamps to India time
@@ -89,7 +90,7 @@ jobs:
           PY
 
       - name: Apply Taj Telegram alert rules
-        if: ${{ success() }}
+        if: ${{ steps.taj_check.outcome == 'success' }}
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
