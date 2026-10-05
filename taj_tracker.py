@@ -143,7 +143,7 @@ def open_calendar(page):
     try:
 
         date_field = page.locator(
-            "text=/\\d{1,2}\\s+[A-Za-z]{3}\\s+2026/"
+            "text=/\d{1,2}\s+[A-Za-z]{3}\s+2026/"
         ).first
 
         date_field.click(
@@ -964,12 +964,12 @@ def extract_room_rates(page, room_name):
             card = card[:min(stop_positions)]
 
         standard_match = re.search(
-            r"STANDARD RATE\\s+₹\\s*([\\d,]+)",
+            r"STANDARD RATE\s+₹\s*([\d,]+)",
             card,
             re.I
         )
         member_match = re.search(
-            r"MEMBER RATE\\s+₹\\s*([\\d,]+)",
+            r"MEMBER RATE\s+₹\s*([\d,]+)",
             card,
             re.I
         )
@@ -978,13 +978,13 @@ def extract_room_rates(page, room_name):
         # karta hai, isliye thoda wider fallback bhi rakha gaya hai.
         if not standard_match:
             standard_match = re.search(
-                r"STANDARD RATE.{0,120}?₹\\s*([\\d,]+)",
+                r"STANDARD RATE.{0,120}?₹\s*([\d,]+)",
                 card,
                 re.I
             )
         if not member_match:
             member_match = re.search(
-                r"MEMBER RATE.{0,120}?₹\\s*([\\d,]+)",
+                r"MEMBER RATE.{0,120}?₹\s*([\d,]+)",
                 card,
                 re.I
             )
@@ -1219,7 +1219,7 @@ def get_taj_api_response(page, context):
             for i in range(min(buttons.count(), 80)):
                 b = buttons.nth(i)
                 if b.is_visible():
-                    txt = re.sub(r"\\s+", " ", b.inner_text()).strip()
+                    txt = re.sub(r"\s+", " ", b.inner_text()).strip()
                     if txt:
                         visible.append(txt[:80])
             print("Visible booking controls:", visible[:30])
