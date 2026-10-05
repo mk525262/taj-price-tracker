@@ -1223,6 +1223,8 @@ def get_taj_api_response(page, context):
     booking_url = (
         "https://www.tajhotels.com/en-in/bookings/landing-page"
         "?hotelId=d21c3bf6-f508-47ae-a456-540429b02b0d"
+        "&adults=1&children=0&rooms=1"
+        "&from=25%2F12%2F2026&to=26%2F12%2F2026"
     )
 
     print("Taj actual booking flow open kar raha hoon...")
@@ -1230,6 +1232,20 @@ def get_taj_api_response(page, context):
     print("Taj booking page URL after load:", page.url)
     print("Taj booking page title:", page.title())
     page.wait_for_timeout(7000)
+
+    # The booking landing page has a BOOK A STAY control which can initialise
+    # the actual room-search state. Click it before touching the calendar.
+    try:
+        stay_controls = page.get_by_text("BOOK A STAY", exact=True)
+        for i in range(min(stay_controls.count(), 10)):
+            control = stay_controls.nth(i)
+            if control.is_visible():
+                print("Clicking BOOK A STAY to initialise Taj booking flow.")
+                control.click(timeout=5000)
+                page.wait_for_timeout(4000)
+                break
+    except Exception as e:
+        print("BOOK A STAY click skipped:", e)
 
     # Select the exact requested dates in the live booking UI.
     if not select_dates(page):
@@ -1242,7 +1258,8 @@ def get_taj_api_response(page, context):
         r"CHECK AVAILABILITY",
         r"VIEW ROOMS",
         r"SHOW ROOMS",
-        r"CONTINUE"
+        r"CONTINUE",
+        r"BOOK A STAY"
     ):
         try:
             controls = page.get_by_text(re.compile(pattern, re.I))
