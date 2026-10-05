@@ -922,7 +922,7 @@ def _rate_events(section):
 
 def extract_room_rates(page, room_name):
     print("")
-    print(room_name + ": actual displayed room prices read kar raha hoon...")
+    print(room_name + ": Best Available Rate - Room Only card read kar raha hoon...")
 
     try:
         section = _room_section_text(page, room_name)
@@ -930,60 +930,96 @@ def extract_room_rates(page, room_name):
             print(room_name + ": room ka rendered text nahi mila.")
             return None
 
-        events = _rate_events(section)
-        if not events:
-            print(room_name + ": actual ₹ price nahi mila.")
+        # IMPORTANT:
+        # Taj ke room card me multiple rate cards hote hain. Pehle hum
+        # generic "first MEMBER/STANDARD" price le rahe the, jiski wajah se
+        # Advance Purchase / doosre rate cards ka price STANDARD ke naam se
+        # aa sakta tha. Ab screenshot me visible exact card ko target karte
+        # hain: "Best Available Rate - Room Only".
+        upper = section.upper()
+        marker = "BEST AVAILABLE RATE - ROOM ONLY"
+        start_pos = upper.find(marker)
+
+        if start_pos < 0:
+            print(room_name + ": Best Available Rate - Room Only card nahi mila.")
             return None
 
-        member = None
-        standard = None
-        skip_standard_after_rejected_member = False
+        card = section[start_pos:]
 
-        for event in events:
-            label = event["label"]
-            price = event["price"]
+        # Card ko next rate-card heading par stop karo. Isse Advance Purchase,
+        # package aur doosre offers ke prices mix nahi honge.
+        stop_markers = [
+            "ADVANCE PURCHASE",
+            "ROOM WITH BREAKFAST",
+            "BREAKFAST INCLUSIVE",
+            "MEMBER EXCLUSIVE",
+            "VIEW MORE RATES"
+        ]
+        stop_positions = [
+            card.upper().find(marker)
+            for marker in stop_markers
+            if card.upper().find(marker) > 0
+        ]
+        if stop_positions:
+            card = card[:min(stop_positions)]
 
-            # A 100% non-refundable condition belongs to the rate card whose
-            # first rate follows it. If that card also exposes a STANDARD RATE,
-            # skip that standard rate until the next MEMBER RATE starts.
-            if label == "member":
-                skip_standard_after_rejected_member = False
+        standard_match = re.search(
+            r"STANDARD RATE\\s+₹\\s*([\\d,]+)",
+            card,
+            re.I
+        )
+        member_match = re.search(
+            r"MEMBER RATE\\s+₹\\s*([\\d,]+)",
+            card,
+            re.I
+        )
 
-                if is_100_percent_nonrefundable(event["segment"]):
-                    print("MEMBER RATE: 100% full-stay non-refundable card ignore kiya.")
-                    skip_standard_after_rejected_member = True
-                    continue
+        # Taj kabhi label aur amount ke beech line-break/extra text inject
+        # karta hai, isliye thoda wider fallback bhi rakha gaya hai.
+        if not standard_match:
+            standard_match = re.search(
+                r"STANDARD RATE.{0,120}?₹\\s*([\\d,]+)",
+                card,
+                re.I
+            )
+        if not member_match:
+            member_match = re.search(
+                r"MEMBER RATE.{0,120}?₹\\s*([\\d,]+)",
+                card,
+                re.I
+            )
 
-                if member is None:
-                    member = price
-                    print(room_name + " MEMBER RATE: ₹{:,.0f}".format(member))
-
-            else:
-                if skip_standard_after_rejected_member:
-                    print("STANDARD RATE: same 100% non-refundable card ignore kiya.")
-                    continue
-
-                if is_100_percent_nonrefundable(event["segment"]):
-                    print("STANDARD RATE: 100% full-stay non-refundable card ignore kiya.")
-                    continue
-
-                if standard is None:
-                    standard = price
-                    print(room_name + " STANDARD RATE: ₹{:,.0f}".format(standard))
-
-            if member is not None and standard is not None:
-                break
+        standard = (
+            int(standard_match.group(1).replace(",", ""))
+            if standard_match else None
+        )
+        member = (
+            int(member_match.group(1).replace(",", ""))
+            if member_match else None
+        )
 
         if member is None and standard is None:
-            print(room_name + ": actual price nahi mila.")
+            print(room_name + ": Best Available card me price nahi mila.")
+            print("Card text:", card[:1200])
             return None
 
-        return {"member": member, "standard": standard}
+        print(
+            room_name + " BEST AVAILABLE MEMBER RATE: " +
+            ("₹{:,.0f}".format(member) if member is not None else "Not available")
+        )
+        print(
+            room_name + " BEST AVAILABLE STANDARD RATE: " +
+            ("₹{:,.0f}".format(standard) if standard is not None else "Not available")
+        )
+
+        return {
+            "member": member,
+            "standard": standard
+        }
 
     except Exception as e:
-        print(room_name + ": rate extraction error:", e)
+        print(room_name + ": Best Available rate extraction error:", e)
         return None
-
 
 def scroll_to_king(page):
     print("SUPERIOR ROOM KING BED ko actual mouse-wheel se screen par la raha hoon...")
