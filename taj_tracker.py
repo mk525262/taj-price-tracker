@@ -1022,53 +1022,62 @@ def extract_room_rates(page, room_name):
         return None
 
 def scroll_to_king(page):
-    print("SUPERIOR ROOM KING BED ko actual mouse-wheel se screen par la raha hoon...")
+    print("SUPERIOR ROOM KING BED ko direct DOM scroll se screen par la raha hoon...")
 
+    # First try the actual room heading. Playwright can find an element even
+    # when it is below the current viewport; scroll it into view directly.
+    heading = find_room_heading(page, "SUPERIOR ROOM KING BED")
+    if heading:
+        try:
+            heading.scroll_into_view_if_needed(timeout=5000)
+            page.wait_for_timeout(1500)
+            print("KING BED heading DOM se mila aur screen par scroll ho gaya.")
+            return True
+        except Exception as e:
+            print("KING heading direct scroll failed:", e)
+
+    # Fallback: scroll the page and any internal room-list containers.
     page.mouse.move(700, 650)
-
-    for step in range(1, 16):
+    for step in range(1, 31):
         heading = find_room_heading(page, "SUPERIOR ROOM KING BED")
         if heading:
-            box = heading.bounding_box()
-            if box:
-                vh = page.evaluate("window.innerHeight")
-                if 120 <= box["y"] <= vh - 120:
-                    print("KING BED screen par aa gaya.")
-                    return True
+            try:
+                heading.scroll_into_view_if_needed(timeout=3000)
+                page.wait_for_timeout(1000)
+                print("KING BED heading fallback scroll se screen par aa gaya.")
+                return True
+            except Exception:
+                pass
 
         before = page.evaluate("window.scrollY")
-        page.mouse.wheel(0, 700)
-        page.wait_for_timeout(700)
+        page.mouse.wheel(0, 900)
+        page.wait_for_timeout(500)
         after = page.evaluate("window.scrollY")
         print("Mouse-wheel step:", step, "windowY:", round(before, 1), "->", round(after, 1))
 
-        # Taj's room list can be inside an internal scrollable element.
-        if after == before:
-            moved = page.evaluate("""() => {
-                const nodes = Array.from(document.querySelectorAll('*'));
-                const candidates = nodes.filter(e => {
-                    const s = getComputedStyle(e);
-                    return (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
-                           e.scrollHeight > e.clientHeight + 30;
-                });
-                let best = null;
-                let bestTop = Infinity;
-                for (const e of candidates) {
-                    const r = e.getBoundingClientRect();
-                    if (r.width < 300 || r.height < 200) continue;
-                    const top = Math.abs(r.top - 100);
-                    if (top < bestTop) { bestTop = top; best = e; }
-                }
-                if (!best) return {changed:false};
-                const beforeTop = best.scrollTop;
-                best.scrollTop = Math.min(beforeTop + 700, best.scrollHeight - best.clientHeight);
-                return {changed: best.scrollTop !== beforeTop, before: beforeTop, after: best.scrollTop};
-            }""")
-            print("Internal scroll:", moved)
+        moved = page.evaluate("""() => {
+            const nodes = Array.from(document.querySelectorAll('*'));
+            const candidates = nodes.filter(e => {
+                const s = getComputedStyle(e);
+                return (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
+                       e.scrollHeight > e.clientHeight + 50;
+            });
+            let best = null;
+            let bestTop = Infinity;
+            for (const e of candidates) {
+                const r = e.getBoundingClientRect();
+                if (r.width < 300 || r.height < 200) continue;
+                const top = Math.abs(r.top - 100);
+                if (top < bestTop) { bestTop = top; best = e; }
+            }
+            if (!best) return {changed:false};
+            const beforeTop = best.scrollTop;
+            best.scrollTop = Math.min(beforeTop + 900, best.scrollHeight - best.clientHeight);
+            return {changed: best.scrollTop !== beforeTop, before: beforeTop, after: best.scrollTop};
+        }""")
+        print("Internal scroll:", moved)
 
-        page.wait_for_timeout(500)
-
-    print("King heading ko limited scrolling ke baad nahi la paya.")
+    print("King heading 30-step direct/internal scroll ke baad nahi mila.")
     return False
 
 
@@ -1142,6 +1151,15 @@ def rate_is_100pct_nonrefundable(rate):
 
 
 def get_taj_api_response(page, context):
+    """
+    Open Taj's actual booking flow, capture the exact availability POST from
+    the browser, and leave the booking-flow page rendered for UI verification.
+
+    The hotel marketing page is NOT treated as the booking results page.
+    Taj currently exposes a dedicated /en-in/bookings/landing-page flow; using
+    that flow is much more reliable than waiting for the hotel page itself to
+    render room cards.
+    """
     captured = {
         "headers": None,
         "url": None,
@@ -1149,7 +1167,6 @@ def get_taj_api_response(page, context):
         "response_body": None,
         "response_status": None,
     }
-    api_requests = []
 
     def is_target_request(req):
         if not (
@@ -1162,14 +1179,14 @@ def get_taj_api_response(page, context):
             payload = json.loads(req.post_data or "{}")
         except Exception:
             return False
+
+        # These are the fields that identify the exact stay we are tracking.
         for key in ("startDate", "endDate", "numRooms", "adults", "children", "hotelId"):
             if payload.get(key) != TARGET_API_PAYLOAD.get(key):
                 return False
         return True
 
     def capture_request(req):
-        if TAJ_API_HOST in req.url:
-            api_requests.append((req.method, req.url))
         if is_target_request(req) and captured["headers"] is None:
             captured["headers"] = req.all_headers()
             captured["url"] = req.url
@@ -1192,113 +1209,105 @@ def get_taj_api_response(page, context):
             except Exception as e:
                 print("Could not read Taj browser API response:", e)
 
-    page.on("request", capture_request)
-    page.on("response", capture_response)
+    # Capture requests/responses from EVERY page in the context, including a
+    # popup/new tab opened by Taj's BOOK NOW/BOOK A STAY control.
+    context.on("request", capture_request)
+    context.on("response", capture_response)
 
-    # IMPORTANT:
-    # Do not trust the URL query string or an API request emitted during the
-    # initial page load. We explicitly drive Taj's date picker first and then
-    # accept only an availability response whose POST body matches our exact
-    # requested stay.
-    page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-    print("Taj page URL after load:", page.url)
-    print("Taj page title:", page.title())
-    page.wait_for_timeout(5000)
+    booking_url = (
+        "https://www.tajhotels.com/en-in/bookings/landing-page"
+        "?hotelId=d21c3bf6-f508-47ae-a456-540429b02b0d"
+    )
 
-    # The URL itself contains the exact target stay. Because this is a
-    # brand-new browser context with cache disabled and service workers blocked,
-    # an exact-payload availability response emitted during this page load is
-    # a fresh network response for THIS run and is safe to use.
-    #
-    # IMPORTANT: Do NOT throw away that response and wait only for a second
-    # request after the calendar click. Taj sometimes does not emit a second
-    # availability POST after the UI date selection, which previously caused
-    # perfectly valid 5-minute checks to fail and stopped Excel history from
-    # updating. We still require the POST payload to match the exact target
-    # dates/guest/room/hotel, HTTP 200, and we still verify the rendered rate
-    # cards below before saving the price.
-    initial_exact_response = bool(captured["response_body"])
-    if initial_exact_response:
-        print("Exact target availability response already captured during fresh page load.")
-    else:
-        print("No exact target response during initial load; explicitly selecting 25 Dec 2026 -> 26 Dec 2026...")
-        if not select_dates(page):
-            raise RuntimeError("Taj date picker could not be explicitly set to 25-26 Dec 2026.")
+    print("Taj hotel page ke bajay actual Taj booking flow open kar raha hoon...")
+    page.goto(booking_url, wait_until="domcontentloaded", timeout=60000)
+    print("Taj booking page URL after load:", page.url)
+    print("Taj booking page title:", page.title())
+    page.wait_for_timeout(7000)
 
-        print("Waiting for a fresh availability request after date selection...")
-        page.wait_for_timeout(3000)
-
-    # If Taj requires an explicit search/availability click after the dates,
-    # trigger it only when we still do not have an exact target response.
-    if not captured["response_body"]:
-        for pattern in (
-            r"^SEARCH$",
-            r"^Search$",
-            r"CHECK AVAILABILITY",
-            r"VIEW ROOMS",
-            r"SHOW ROOMS",
-        ):
-            try:
-                controls = page.get_by_text(re.compile(pattern, re.I))
-                for i in range(min(controls.count(), 15)):
-                    control = controls.nth(i)
-                    if not control.is_visible():
-                        continue
-                    print("Clicking booking control:", control.inner_text())
-                    control.click(timeout=5000)
-                    page.wait_for_timeout(5000)
-                    if captured["response_body"]:
-                        break
-                if captured["response_body"]:
-                    break
-            except Exception:
-                pass
-
-    if not captured["response_body"]:
+    # If Taj shows its booking shell, click BOOK A STAY to expose the booking
+    # controls. Do not depend on a specific React class name.
+    for label in ("BOOK A STAY", "BOOK NOW"):
         try:
-            buttons = page.locator("button, [role='button']")
-            visible = []
-            for i in range(min(buttons.count(), 100)):
-                b = buttons.nth(i)
-                if b.is_visible():
-                    txt = re.sub(r"\s+", " ", b.inner_text()).strip()
-                    if txt:
-                        visible.append(txt[:100])
-            print("Visible booking controls:", visible[:40])
+            controls = page.get_by_text(label, exact=True)
+            for i in range(min(controls.count(), 10)):
+                control = controls.nth(i)
+                if not control.is_visible():
+                    continue
+                print("Clicking Taj booking control:", label)
+                control.click(timeout=5000)
+                page.wait_for_timeout(2500)
+                break
         except Exception:
             pass
 
-        # Do NOT fail the whole 5-minute price check just because Taj did not
-        # emit its availability POST. The rendered booking UI is itself a
-        # fresh source in this new cache-disabled browser session. The price
-        # extraction below still requires BOTH target room cards and BOTH
-        # Member/Standard rates before anything is saved.
-        print(
-            "WARNING: Taj exact availability API response nahi mila. "
-            "Rendered booking UI ko fresh price source ke roop mein verify karenge."
+    # Set the exact tracked stay in the booking flow if the calendar is
+    # available. If Taj has already populated the dates from its session,
+    # select_dates() safely re-confirms them.
+    try:
+        if not select_dates(page):
+            print("Booking flow date picker could not be driven; continuing to inspect exact target response/UI.")
+    except Exception as e:
+        print("Booking flow date selection exception:", e)
+
+    # Search/availability controls on the actual booking page.
+    for pattern in (
+        r"^SEARCH$",
+        r"CHECK AVAILABILITY",
+        r"VIEW ROOMS",
+        r"SHOW ROOMS",
+        r"CONTINUE"
+    ):
+        if captured["response_body"]:
+            break
+        try:
+            controls = page.get_by_text(re.compile(pattern, re.I))
+            for i in range(min(controls.count(), 20)):
+                control = controls.nth(i)
+                if not control.is_visible():
+                    continue
+                txt = re.sub(r"\s+", " ", control.inner_text()).strip()
+                print("Clicking booking-flow control:", txt)
+                control.click(timeout=5000)
+                page.wait_for_timeout(6000)
+                if captured["response_body"]:
+                    break
+        except Exception:
+            pass
+
+    # Give the booking application time to finish rendering its room list.
+    page.wait_for_timeout(5000)
+
+    if captured["response_body"]:
+        print("Taj fresh browser availability response captured.")
+        print("Fresh API URL:", captured["url"])
+        print("Fresh API request payload:", captured["body"])
+
+        if captured["response_status"] != 200:
+            print("Taj browser availability API HTTP:", captured["response_status"])
+            return None
+
+        try:
+            data = json.loads(captured["response_body"])
+        except Exception as e:
+            print("Fresh Taj API response JSON parse failed:", e)
+            return None
+
+        Path("taj_last_api_response.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8"
         )
-        return None
+        print("Fresh Taj browser availability response saved for verification.")
+        return data
 
-    print("Taj fresh browser availability response captured.")
-    print("Fresh API URL:", captured["url"])
-    print("Fresh API request payload:", captured["body"])
-
-    if captured["response_status"] != 200:
-        print(
-            "WARNING: Taj browser availability API returned HTTP "
-            + str(captured["response_status"])
-            + "; rendered UI verification continue karenge."
-        )
-        return None
-
-    data = json.loads(captured["response_body"])
-    Path("taj_last_api_response.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
-
-    print("Fresh Taj browser availability response captured for verification.")
-    return data
+    # No API response is not automatically a failure anymore. We are now on
+    # the real Taj booking flow, so the rendered room cards themselves are a
+    # valid fresh website source. check_price() will require BOTH exact room
+    # cards and BOTH member/standard prices before saving anything.
+    print("WARNING: Exact Taj availability API response nahi mila.")
+    print("Current page URL:", page.url)
+    print("Real booking-flow UI ko fresh price source ke roop mein verify karenge.")
+    return None
 
 
 def extract_api_rates(data):
