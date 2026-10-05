@@ -89,7 +89,7 @@ jobs:
           PY
 
       - name: Apply Taj Telegram alert rules
-        if: always()
+        if: ${{ success() }}
         env:
           TAJ_TELEGRAM_BOT_TOKEN: ${{ secrets.TAJ_TELEGRAM_BOT_TOKEN }}
         run: |
