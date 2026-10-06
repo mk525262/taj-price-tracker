@@ -4,7 +4,7 @@ name: Taj Excel History Sync 5m
 on:
   workflow_dispatch:
   schedule:
-    # Canonical 5-minute schedule. GitHub may delay top-of-hour runs, but must not stop the cadence.
+    # Canonical 5-minute schedule. Watchdog provides recovery if GitHub misses a scheduled run.
     - cron: "*/5 * * * *"
   push:
     paths:
