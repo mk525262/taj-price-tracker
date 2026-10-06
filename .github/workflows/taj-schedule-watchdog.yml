@@ -1,0 +1,66 @@
+name: Taj 5m Schedule Watchdog
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run 2 minutes after the main 5-minute cadence.
+    - cron: "2-59/5 * * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Taj freshness and recover missed run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import csv
+          import datetime as dt
+          import json
+          import subprocess
+          from pathlib import Path
+
+          path = Path("Taj_Price_History.csv")
+          if not path.exists():
+              print("No Taj history file yet; watchdog will dispatch the main workflow.")
+              stale = True
+          else:
+              with path.open(encoding="utf-8", newline="") as f:
+                  rows = list(csv.reader(f))
+              if len(rows) < 2:
+                  stale = True
+              else:
+                  raw = rows[-1][0].strip()
+                  ts = dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(
+                      tzinfo=dt.timezone(dt.timedelta(hours=5, minutes=30))
+                  )
+                  now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30)))
+                  age = (now - ts).total_seconds()
+                  stale = age > 480
+                  print(f"Latest Taj row: {raw}; age={age:.0f}s; stale={stale}")
+
+          runs_raw = subprocess.check_output(
+              ["gh", "run", "list", "--workflow", "taj-excel-sync-5m.yml",
+               "--limit", "10", "--json", "status,createdAt"],
+              text=True,
+          )
+          runs = json.loads(runs_raw)
+          active = any(r.get("status") in ("queued", "in_progress", "waiting", "requested") for r in runs)
+          print(f"Main workflow active: {active}")
+
+          if stale and not active:
+              print("Freshness gap detected. Dispatching Taj main workflow.")
+              subprocess.check_call([
+                  "gh", "workflow", "run", "taj-excel-sync-5m.yml", "--ref", "main"
+              ])
+          else:
+              print("No recovery dispatch needed.")
+          PY
