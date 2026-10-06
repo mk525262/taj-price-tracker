@@ -4,8 +4,8 @@ name: Taj Excel History Sync 5m
 on:
   workflow_dispatch:
   schedule:
-    # Avoid the top-of-hour GitHub Actions load spike; still runs every 5 minutes.
-    - cron: "2-59/5 * * * *"
+    # Canonical 5-minute schedule. GitHub may delay top-of-hour runs, but must not stop the cadence.
+    - cron: "*/5 * * * *"
   push:
     paths:
       - "taj_tracker.py"
