@@ -49,15 +49,34 @@ jobs:
 
           runs_raw = subprocess.check_output(
               ["gh", "run", "list", "--workflow", "taj-excel-sync-5m.yml",
-               "--limit", "10", "--json", "status,createdAt"],
+               "--limit", "20", "--json", "databaseId,status,createdAt"],
               text=True,
           )
           runs = json.loads(runs_raw)
-          active = any(r.get("status") in ("queued", "in_progress", "waiting", "requested") for r in runs)
-          print(f"Main workflow active: {active}")
 
-          if stale and not active:
-              print("Freshness gap detected. Dispatching Taj main workflow.")
+          # A queued run can deadlock recovery because the main workflow uses
+          # serialized concurrency. Only an actually running job is allowed to
+          # block recovery. If freshness is stale and nothing is in progress,
+          # cancel orphaned queued/requested runs and dispatch one clean run.
+          in_progress = [r for r in runs if r.get("status") == "in_progress"]
+          orphaned = [
+              r for r in runs
+              if r.get("status") in ("queued", "waiting", "requested")
+          ]
+          print(f"Main workflow in progress: {bool(in_progress)}")
+          print(f"Main workflow queued/orphaned: {len(orphaned)}")
+
+          if stale and not in_progress:
+              for run in orphaned:
+                  run_id = run.get("databaseId")
+                  if run_id:
+                      print(f"Cancelling orphaned queued Taj run: {run_id}")
+                      subprocess.run(
+                          ["gh", "run", "cancel", str(run_id)],
+                          check=False,
+                      )
+
+              print("Freshness gap detected. Dispatching one clean Taj main workflow.")
               subprocess.check_call([
                   "gh", "workflow", "run", "taj-excel-sync-5m.yml", "--ref", "main"
               ])
