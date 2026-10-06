@@ -3,8 +3,8 @@ name: Taj 5m Schedule Watchdog
 on:
   workflow_dispatch:
   schedule:
-    # Run 2 minutes after the offset main 5-minute cadence.
-    - cron: "4-59/5 * * * *"
+    # Run 1 minute after the main 5-minute cadence.
+    - cron: "1-59/5 * * * *"
 
 permissions:
   contents: read
