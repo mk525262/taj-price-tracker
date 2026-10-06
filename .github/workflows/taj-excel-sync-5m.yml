@@ -18,7 +18,9 @@ permissions:
   actions: write
 
 concurrency:
-  group: taj-excel-sync-${{ github.run_id }}
+  # Serialize all Taj runs so Excel/state/Git pushes cannot race each other.
+  group: taj-excel-sync-main
+  cancel-in-progress: false
   cancel-in-progress: false
 
 jobs:
