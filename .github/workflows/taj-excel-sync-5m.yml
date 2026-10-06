@@ -16,7 +16,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: taj-excel-sync
+  group: taj-excel-sync-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
