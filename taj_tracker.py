@@ -1510,3 +1510,4 @@ with sync_playwright() as p:
         raise
 
 # Live Taj UI price source: strict browser booking-flow verification enabled.
+# Cadence resilience: keep scheduled runs independent of prior workflow attempts.
