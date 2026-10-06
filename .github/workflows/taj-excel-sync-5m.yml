@@ -4,10 +4,12 @@ name: Taj Excel History Sync 5m
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    # Avoid the top-of-hour GitHub Actions load spike; still runs every 5 minutes.
+    - cron: "2-59/5 * * * *"
   push:
     paths:
       - "taj_tracker.py"
+      - ".github/workflows/taj-excel-sync-5m.yml"
   repository_dispatch:
     types: [taj_5m]
 
@@ -22,6 +24,7 @@ concurrency:
 jobs:
   sync-taj-excel:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Start 5-minute cadence clock
         run: echo "CADENCE_START=$(date +%s)" >> "$GITHUB_ENV"
