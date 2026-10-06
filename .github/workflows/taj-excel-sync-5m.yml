@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
   schedule:
     # Canonical 5-minute schedule. Watchdog provides recovery if GitHub misses a scheduled run.
+    # Recovery logic also clears orphaned queued runs before dispatching a clean run.
     - cron: "*/5 * * * *"
   push:
     paths:
