@@ -21,7 +21,6 @@ concurrency:
   # Serialize all Taj runs so Excel/state/Git pushes cannot race each other.
   group: taj-excel-sync-main
   cancel-in-progress: false
-  cancel-in-progress: false
 
 jobs:
   sync-taj-excel:
