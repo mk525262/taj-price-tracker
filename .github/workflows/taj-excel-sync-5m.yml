@@ -110,6 +110,8 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import time
+          import urllib.error
           import urllib.request
           from openpyxl import load_workbook
 
@@ -133,18 +135,33 @@ jobs:
           request = urllib.request.Request(
               webhook,
               data=data,
-              headers={"Content-Type": "application/json"},
+              headers={"Content-Type": "application/json", "User-Agent": "taj-price-tracker/1.0"},
               method="POST",
           )
 
-          with urllib.request.urlopen(request, timeout=30) as response:
-              result = json.loads(response.read().decode("utf-8"))
-
-          print("Google Sheet response:", result)
-          if not result.get("success"):
-              raise SystemExit("Google Sheet sync failed: " + str(result))
-
-          print("Latest Taj price synced to Google Sheet.")
+          last_error = None
+          for attempt in range(1, 4):
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = response.read().decode("utf-8", errors="replace")
+                      status = response.status
+                  print(f"Google Sheet HTTP attempt {attempt}: {status}")
+                  print("Google Sheet raw response:", body[:1000])
+                  try:
+                      result = json.loads(body)
+                  except json.JSONDecodeError as exc:
+                      raise RuntimeError(f"Google Sheet returned non-JSON response (HTTP {status}): {body[:500]!r}") from exc
+                  if not result.get("success"):
+                      raise RuntimeError("Google Sheet sync returned success=false: " + str(result))
+                  print("Latest Taj price synced to Google Sheet.")
+                  break
+              except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError) as exc:
+                  last_error = exc
+                  print(f"Google Sheet sync attempt {attempt} failed: {exc}")
+                  if attempt < 3:
+                      time.sleep(5)
+          else:
+              raise SystemExit("Google Sheet sync failed after 3 attempts: " + str(last_error))
           PY
 
       - name: Apply Taj Telegram alert rules
